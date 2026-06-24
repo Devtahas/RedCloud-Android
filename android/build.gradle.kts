@@ -1,11 +1,13 @@
 allprojects {
     repositories {
-        // هدایت مستقیم زیرپروژه‌ها و کدهای اندرویدایکس به آیینه‌های بدون فیلتر علی‌بابا
+        // ابتدا مخازن رسمی برای سرورهای خارج و گیت‌هاب
+        google()
+        mavenCentral()
+        
+        // مخازن آیینه به عنوان پشتیبان برای زمان تحریم در سیستم لوکال
         maven { url = uri("https://maven.aliyun.com/repository/google") }
         maven { url = uri("https://maven.aliyun.com/repository/public") }
         maven { url = uri("https://maven.aliyun.com/repository/jcenter") }
-        google()
-        mavenCentral()
     }
 }
 
