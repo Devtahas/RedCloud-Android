@@ -1,0 +1,56 @@
+name: Flutter Android Build & Release
+
+on:
+  push:
+    tags:
+      - "v*" # این ابزار زمانی اجرا می‌شود که شما تگی مثل v1.0.0 را پوش کنید
+  workflow_dispatch: # به شما اجازه می‌دهد بیلد را به صورت دستی هم از سایت گیت‌هاب استارت بزنید
+
+# اجازه دسترسی نوشتن به توکن گیت‌هاب جهت آپلود فایل‌ها در بخش ریلیز
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build & Release Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      # ۱. دریافت کدهای پروژه
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ۲. نصب و راه‌اندازی جاوا نسخه ۱۷ برای اندروید
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      # ۳. نصب و راه‌اندازی فلاتر بر روی سرور مجازی گیت‌هاب
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      # ۴. دریافت وابستگی‌های پروژه
+      - name: Install dependencies
+        run: flutter pub get
+
+      # ۵. بیلد فایل‌های APK نهایی با دور زدن اعتبارسنجی نسخه‌های آزمایشی
+      - name: Build APK
+        run: flutter build apk --release --android-skip-build-dependency-validation
+
+      # ۶. ساخت خودکار ریلیز در گیت‌هاب و آپلود فایل‌های APK
+      - name: Create Release & Upload Assets
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            build/app/outputs/flutter-apk/app-universal-release.apk
+            build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
