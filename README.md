@@ -1,6 +1,6 @@
 # RedCloud VPN (Android Client)
 
-A modern, fast, and secure V2Ray/Xray VPN client for Android built using **Flutter** and the **Xray-Core** Go engine. This application routes system-wide network traffic through encrypted tunnels, bypassing censorship with automated, high-performance background processes.
+A modern, fast, and secure VLESS/VMess/Trojan VPN client for Android built using **Flutter** and the **Xray-Core** Go engine. This application routes system-wide network traffic through encrypted tunnels, bypassing censorship with automated, high-performance background processes.
 
 ---
 
@@ -44,7 +44,7 @@ A modern, fast, and secure V2Ray/Xray VPN client for Android built using **Flutt
 
 If you want to compile the project locally or contribute:
 
-```bash
+
 # 1. Clone the repository
 git clone https://github.com/Devtahas/RedCloud-Android.git
 
