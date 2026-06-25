@@ -53,6 +53,5 @@ flutter pub get
 
 # 3. Open your Android emulator or connect a physical device, then run:
 flutter run
-Note: Ensure your minSdkVersion is set to 21 and Gradle matches 8.11.1 as configured in the android folder.
-📸 Screenshots / تصاویر محیط برنامه
+تصاویر محیط برنامه
 ![alt text](./screenshots/image.png)
