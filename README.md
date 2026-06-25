@@ -56,6 +56,3 @@ flutter run
 Note: Ensure your minSdkVersion is set to 21 and Gradle matches 8.11.1 as configured in the android folder.
 📸 Screenshots / تصاویر محیط برنامه
 ![alt text](./screenshots/image.png)
-code
-Code
----
