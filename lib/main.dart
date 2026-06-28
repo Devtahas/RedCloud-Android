@@ -1,11 +1,17 @@
 // ignore_for_file: deprecated_member_use, avoid_print
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io'; // کتابخانه شبکه جهت پینگ و متدهای HTTP
+import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // برای کپی اطلاعات از کلیپ‌بورد سیستم
+import 'package:flutter/services.dart';
 import 'package:flutter_v2ray_client/flutter_v2ray.dart';
-import 'package:url_launcher/url_launcher.dart'; // لایبرری جهت هدایت مستقیم کاربر به دامنه‌ها
+import 'package:url_launcher/url_launcher.dart';
+
+// ۱. آدرس ورکر مرکزی مدیریت اکانت‌های شما روی کلاودفلر (بدون اسلش انتهایی)
+const String workerApiUrl = "https://round-sea-8418.redcloudir.workers.dev";
+
+// ۲. آدرس خام فایل کانفیگ گیت‌هاب شما
+const String githubRawUrl = "https://raw.githubusercontent.com/Devtahas/Devtahas-redcloud-config/main/accounts.json";
 
 void main() {
   runApp(const MyApp());
@@ -19,8 +25,8 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> {
-  bool _isDarkMode = true; // وضعیت تم برنامه
-  String _currentLang = "fa"; // زبان پیش‌فرض (فارسی)
+  bool _isDarkMode = true;
+  String _currentLang = "fa";
 
   void _toggleTheme() {
     setState(() {
@@ -79,21 +85,31 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   var v2rayStatus = ValueNotifier<V2RayStatus>(V2RayStatus());
   Timer? _logTimer;
-  int _currentTabIndex = 0; // نگهدارنده تب فعلی
+  Timer? _reportTimer; 
+  int _currentTabIndex = 0;
   
-  late final V2ray flutterV2ray = V2ray(
-    onStatusChanged: (status) {
-      v2rayStatus.value = status;
-    },
-  );
+  // شیء flutterV2ray را به این صورت ویرایش کنید:
+late final V2ray flutterV2ray = V2ray(
+  onStatusChanged: (status) {
+    v2rayStatus.value = status;
+    
+    // چک کردن کاملاً آنی و ثانیه‌ای سقف ۵ گیگابایت به محض دریافت دیتای جدید از هسته
+    if (status.state == "CONNECTED" && _selectedAccountIndex >= 0) {
+      _checkAndAutoSwitchLimit(
+        _fetchedAccounts[_selectedAccountIndex], 
+        status.download + status.upload
+      );
+    }
+  },
+);
 
   final TextEditingController _configController = TextEditingController();
   
-  // متغیرهای لازم برای اسکن و مدیریت اکانت‌های گیت‌هاب
   List<Map<String, String>> _fetchedAccounts = [];
   int _selectedAccountIndex = -1;
   bool _isLoadingAccounts = false;
   bool _isScanningIPs = false;
+  bool _serversUpdatingMode = false;
   
   String _fastestIP = "104.18.0.14";
   int _bestPing = 0;
@@ -103,7 +119,14 @@ class _HomePageState extends State<HomePage> {
   String _fullConfigJson = "";
   String _remark = "RedCloud Server";
 
-  // لیست آی‌پی‌های باکیفیت و تمیز کلاودفلر جهت اسکن همزمان
+  // متغیرهای تله‌متری و حذف محلی برای غلبه بر تاخیر زمان‌بندی گیت‌هاب
+  int _lastSentDownload = 0;
+  int _lastSentUpload = 0;
+  final int _maxDailyBytes = 5 * 1024 * 1024 * 1024; // سقف ۵ گیگابایت برای هر ورکر
+  
+  // لیست سیاه محلی جهت ثبت سرورهایی که در این پارت اتمام ترافیک شده‌اند تا گیت‌هاب همگام‌سازی شود
+  final Set<String> _locallyExhaustedWorkers = {};
+
   final List<String> _cloudflareIPs = [
     "104.16.1.1", "104.17.2.2", "104.18.3.3", "104.19.4.4", "104.20.5.5",
     "104.21.6.6", "104.22.7.7", "104.24.8.8", "104.25.9.9", "104.26.10.10",
@@ -111,7 +134,6 @@ class _HomePageState extends State<HomePage> {
     "188.114.96.1", "188.114.97.2"
   ];
 
-  // دیتابیس ترجمه‌های زبان برنامه (فارسی و انگلیسی)
   final Map<String, Map<String, String>> _localizedValues = {
     "fa": {
       "app_title": "RedCloud VPN",
@@ -124,7 +146,7 @@ class _HomePageState extends State<HomePage> {
       "disconnected": "قطع اتصال",
       "scan_ip": "اسکن آی‌پی",
       "shared_acc": "اکانت‌های اشتراکی هوشمند",
-      "acc_fetch_err": "خطا در دریافت اکانت‌ها؛ لطفا همگام‌سازی را بزنید.",
+      "acc_fetch_err": "خطا در دریافت اکانت‌ها؛ لطفاً همگام‌سازی را بزنید.",
       "ping_info": "آی‌پی زنده کلودفلر: ",
       "ms": "میلی‌ثانیه",
       "down_speed": "سرعت دانلود",
@@ -135,7 +157,7 @@ class _HomePageState extends State<HomePage> {
       "no_config_err": "لطفاً ابتدا یک کانفیگ معتبر وارد کنید",
       "connecting_msg": "در حال برقراری اتصال...",
       "os_perm_err": "لطفاً تاییدیه کادر سیستم‌عامل را بدهید و مجدداً دکمه اتصال را بزنید.",
-      "acc_sync_ok": "اکانت‌های جدید با موفقیت دریافت و تصادفی‌سازی شدند.",
+      "acc_sync_ok": "لیست اکانت‌های فعال با موفقیت دریافت و فیلتر شدند.",
       "acc_sync_err": "خطا در ارتباط با گیت‌هاب؛ لطفاً اینترنت خود را چک کنید.",
       "clipboard_empty": "حافظه موقت سیستم شما خالی است",
       "config_saved": "کانفیگ با موفقیت ثبت شد",
@@ -154,6 +176,8 @@ class _HomePageState extends State<HomePage> {
       "contact_telegram": "کانال تلگرام",
       "contact_web": "وب‌سایت ما",
       "copied_msg": "در حافظه موقت کپی شد!",
+      "server_updating_banner": "سرورها در حال آپدیت هستند. از شکیبایی شما متشکریم.",
+      "limit_exhausted_banner": "مصرف روزانه اکانت به پایان رسید! در حال تعویض خودکار به اکانت جدید...",
     },
     "en": {
       "app_title": "RedCloud VPN",
@@ -177,7 +201,7 @@ class _HomePageState extends State<HomePage> {
       "no_config_err": "Please enter a valid config first",
       "connecting_msg": "Establishing connection...",
       "os_perm_err": "Please approve the system VPN dialog and press connect again.",
-      "acc_sync_ok": "New accounts fetched and randomized successfully.",
+      "acc_sync_ok": "Active accounts fetched and filtered successfully.",
       "acc_sync_err": "Failed to connect to GitHub. Please check your internet.",
       "clipboard_empty": "Your clipboard is empty",
       "config_saved": "Config registered successfully",
@@ -196,21 +220,21 @@ class _HomePageState extends State<HomePage> {
       "contact_telegram": "Telegram",
       "contact_web": "Our Website",
       "copied_msg": "Copied to clipboard!",
+      "server_updating_banner": "Servers are currently updating. Thank you for your patience.",
+      "limit_exhausted_banner": "Daily usage limit reached! Auto-switching to a new fresh account...",
     }
   };
 
-  // دسترسی آسان به ترجمه‌ها بر اساس زبان فعال
   String _t(String key) {
     return _localizedValues[widget.currentLang]?[key] ?? key;
   }
 
-  // نمایش اسنک‌بار پیام‌ها در سراسر اپلیکیشن
   void _showSnackBar(String message) {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(message),
-          duration: const Duration(seconds: 3),
+          duration: const Duration(seconds: 4),
         ),
       );
     }
@@ -239,16 +263,98 @@ class _HomePageState extends State<HomePage> {
         // نادیده گرفتن خطاها
       }
     });
+
+    // گزارش تله‌متری افزایشی برای ورکر کلاودفلر (بدون تغییر کدهای ویندوز و بک‌اند)
+    _reportTimer = Timer.periodic(const Duration(minutes: 10), (timer) {
+      _reportDeltaUsage();
+    });
   }
 
   @override
   void dispose() {
     _logTimer?.cancel();
+    _reportTimer?.cancel();
     _configController.dispose();
     super.dispose();
   }
 
-  // فرآیند هدایت مستقیم به برنامه‌های ایمیل، تلگرام و مرورگر
+  void _reportDeltaUsage() async {
+    if (v2rayStatus.value.state != "CONNECTED" || _selectedAccountIndex < 0) return;
+
+    final currentDownload = v2rayStatus.value.download;
+    final currentUpload = v2rayStatus.value.upload;
+
+    final int deltaDownload = currentDownload - _lastSentDownload;
+    final int deltaUpload = currentUpload - _lastSentUpload;
+    final int totalDeltaBytes = deltaDownload + deltaUpload;
+
+    if (totalDeltaBytes <= 0) return;
+
+    if (deltaDownload < 0 || deltaUpload < 0) {
+      _lastSentDownload = currentDownload;
+      _lastSentUpload = currentUpload;
+      return;
+    }
+
+    final activeAccount = _fetchedAccounts[_selectedAccountIndex];
+    final String activeWorker = activeAccount['worker'] ?? '';
+
+    // پکت گزارش مصرف تله‌متری که عینا ورکر شما انتظار دارد
+    final Map<String, dynamic> reportPayload = {
+      "worker": activeWorker,
+      "bytes_used": totalDeltaBytes
+    };
+
+    final client = HttpClient();
+    client.connectionTimeout = const Duration(seconds: 5);
+    try {
+      final request = await client.postUrl(Uri.parse('$workerApiUrl/api/report'));
+      request.headers.set('content-type', 'application/json');
+      request.add(utf8.encode(jsonEncode(reportPayload)));
+      
+      final response = await request.close();
+      if (response.statusCode == 200) {
+        _lastSentDownload = currentDownload;
+        _lastSentUpload = currentUpload;
+        print("Delta Telemetry reported: $totalDeltaBytes bytes to $activeWorker");
+
+        // بررسی به پایان رسیدن سهمیه سرور متصل شده در همان لحظه
+        
+      }
+    } catch (e) {
+      print("Telemetry network failure: $e");
+    } finally {
+      client.close();
+    }
+  }
+
+  void _checkAndAutoSwitchLimit(Map<String, String> currentAccount, int totalBytesSession) async {
+    final int previouslyUsedDatabase = int.tryParse(currentAccount['used_bytes'] ?? '0') ?? 0;
+    final int currentRealtimeDailyUsage = previouslyUsedDatabase + totalBytesSession;
+    final String activeWorker = currentAccount['worker'] ?? '';
+
+    if (currentRealtimeDailyUsage >= _maxDailyBytes) {
+      print("Worker daily quota exhausted. Initiating auto-rotation...");
+      
+      // ۱. افزودن فوری ورکر به لیست سیاه محلی تا همگام‌سازی گیت‌هاب تکمیل شود
+      _locallyExhaustedWorkers.add(activeWorker);
+      
+      _showSnackBar(_t("limit_exhausted_banner"));
+      _disconnect();
+      
+      // ۲. دریافت مجدد لیست و انتخاب سرور فول شارژ جدید
+      await _fetchAndLoadAccounts();
+
+      if (_fetchedAccounts.isNotEmpty && !_serversUpdatingMode) {
+        setState(() {
+          _selectedAccountIndex = 0;
+          _updateSelectedConfig();
+        });
+        _connect();
+      }
+    }
+  }
+
   Future<void> _launchURL(String urlString) async {
     final Uri url = Uri.parse(urlString);
     try {
@@ -260,25 +366,65 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  // دریافت اطلاعات فایل JSON مستقیم و خام از گیت‌هاب بدون کش شدن
   Future<void> _fetchAndLoadAccounts({bool showMessage = false}) async {
     setState(() {
       _isLoadingAccounts = true;
+      _serversUpdatingMode = false;
     });
     final client = HttpClient();
+    client.connectionTimeout = const Duration(seconds: 10);
     try {
-      final request = await client.getUrl(Uri.parse('https://raw.githubusercontent.com/Devtahas/CG_BPB/refs/heads/main/accounts.txt'));
+      // استفاده از آدرس خام گیت‌هاب به همراه پارامتر زمان تصادفی جهت بایپس کامل کش CDN گیت‌هاب
+      final cacheBuster = DateTime.now().millisecondsSinceEpoch;
+      final request = await client.getUrl(Uri.parse('$githubRawUrl?cb=$cacheBuster'));
       final response = await request.close();
-      final body = await response.transform(utf8.decoder).join();
       
-      final parsed = _parseAccounts(body);
-      setState(() {
-        _fetchedAccounts = parsed;
-        if (_fetchedAccounts.isNotEmpty) {
-          _selectedAccountIndex = 0;
-          _updateSelectedConfig();
+      if (response.statusCode == 200) {
+        final body = await response.transform(utf8.decoder).join();
+        final List<dynamic> jsonList = jsonDecode(body);
+        
+        final List<Map<String, String>> parsed = [];
+        for (var item in jsonList) {
+          if (item is Map<String, dynamic>) {
+            final String workerName = item['worker']?.toString() ?? '';
+            final String status = item['status']?.toString() ?? 'full';
+
+            // فیلتر کردن اکانت‌های خسته از دیتابیس یا لیست سیاه موقت کلاینت
+            if (status != 'exhausted' && !_locallyExhaustedWorkers.contains(workerName)) {
+              parsed.add({
+                'worker': workerName,
+                'uuid': item['uuid']?.toString() ?? '',
+                'path': item['path']?.toString() ?? '',
+                'status': status,
+                'used_bytes': item['used_bytes']?.toString() ?? '0',
+                'priority': item['priority']?.toString() ?? '1',
+              });
+            }
+          }
         }
-      });
-      if (showMessage) _showSnackBar(_t("acc_sync_ok"));
+
+        // مرتب‌سازی بر اساس فیلد اولویت (Priority) صعودی عینا مطابق ساختار دیتابیس ورکر شما
+        parsed.sort((a, b) {
+          final int pA = int.tryParse(a['priority'] ?? '1') ?? 1;
+          final int pB = int.tryParse(b['priority'] ?? '1') ?? 1;
+          return pA.compareTo(pB);
+        });
+
+        setState(() {
+          _fetchedAccounts = parsed;
+          if (_fetchedAccounts.isNotEmpty) {
+            _selectedAccountIndex = 0;
+            _updateSelectedConfig();
+          } else {
+            _serversUpdatingMode = true;
+            _selectedAccountIndex = -1;
+          }
+        });
+        if (showMessage) _showSnackBar(_t("acc_sync_ok"));
+      } else {
+        if (showMessage) _showSnackBar(_t("acc_sync_err"));
+      }
     } catch (e) {
       if (showMessage) _showSnackBar(_t("acc_sync_err"));
     } finally {
@@ -287,43 +433,6 @@ class _HomePageState extends State<HomePage> {
         _isLoadingAccounts = false;
       });
     }
-  }
-
-  List<Map<String, String>> _parseAccounts(String text) {
-    final List<Map<String, String>> accounts = [];
-    final String cleanText = text.replaceAll('\r\n', '\n');
-    final List<String> blocks = cleanText.split('\n\n');
-    
-    for (var block in blocks) {
-      if (block.trim().isEmpty) continue;
-      final lines = block.split('\n');
-      String worker = '';
-      String uuid = '';
-      String path = '';
-      for (var line in lines) {
-        final parts = line.split(':');
-        if (parts.length >= 2) {
-          final key = parts[0].trim().toLowerCase();
-          final value = parts.sublist(1).join(':').trim();
-          if (key == 'worker') worker = value;
-          if (key == 'uuid') uuid = value;
-          if (key == 'path') path = value;
-        }
-      }
-      if (worker.isNotEmpty && uuid.isNotEmpty && path.isNotEmpty) {
-        accounts.add({
-          'worker': worker,
-          'uuid': uuid,
-          'path': path,
-        });
-      }
-    }
-    
-    if (accounts.length > 5) {
-      accounts.shuffle();
-      return accounts.sublist(0, 5);
-    }
-    return accounts;
   }
 
   void _updateSelectedConfig() {
@@ -342,7 +451,6 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
-  // اسکن همزمان (Concurrent) و فوق‌العاده سریع پورت ۴۴۳ آی‌پی‌های کلودفلر
   Future<int?> _testIP(String ip) async {
     final stopwatch = Stopwatch()..start();
     try {
@@ -376,10 +484,15 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _connect() async {
-    if (_fetchedAccounts.isEmpty) {
+    if (_fetchedAccounts.isEmpty && !_serversUpdatingMode) {
       await _fetchAndLoadAccounts();
     }
     
+    if (_serversUpdatingMode) {
+      _showSnackBar(_t("server_updating_banner"));
+      return;
+    }
+
     if (_fetchedAccounts.isEmpty && _fullConfigJson.isEmpty) {
       _showSnackBar(_t("acc_sync_err"));
       return;
@@ -409,6 +522,10 @@ class _HomePageState extends State<HomePage> {
 
     if (await flutterV2ray.requestPermission()) {
       _showSnackBar("Connecting to: $fastest");
+
+      _lastSentDownload = 0;
+      _lastSentUpload = 0;
+
       flutterV2ray.startV2Ray(
         remark: _remark,
         config: _fullConfigJson,
@@ -421,10 +538,10 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _disconnect() async {
+    _reportDeltaUsage();
     await flutterV2ray.stopV2Ray();
   }
 
-  // تابع تبدیل btyes به فرمت خوانا (KB, MB, GB)
   String _formatBytes(int bytes, {bool isSpeed = false}) {
     if (bytes <= 0) return isSpeed ? "0 B/s" : "0 B";
     const List<String> suffixes = ["B", "KB", "MB", "GB", "TB"];
@@ -696,6 +813,28 @@ class _HomePageState extends State<HomePage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              if (_serversUpdatingMode)
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  margin: const EdgeInsets.only(bottom: 15),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.amber),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.warning_amber_rounded, color: Colors.amber),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          _t("server_updating_banner"),
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.amber),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               Text(
                 _t("shared_acc"),
                 style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.grey),
@@ -1057,7 +1196,6 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // تب ۴: ارتباط با ما (طراحی مدرن کارت‌های شبکه‌ای و لمس مستقیم)
   Widget _buildContactTab() {
     return Padding(
       padding: const EdgeInsets.all(20.0),
@@ -1109,7 +1247,7 @@ class _HomePageState extends State<HomePage> {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
-        onTap: () => _launchURL(url), // اجرای آدرس به صورت مستقیم و بدون نیاز به دکمه کپی
+        onTap: () => _launchURL(url),
         child: Padding(
           padding: const EdgeInsets.all(16.0),
           child: Column(
