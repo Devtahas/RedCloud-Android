@@ -193,102 +193,72 @@ class MainActivity : FlutterActivity() {
     }
 
     // =========================================================================
-    // استخراج و آماده‌سازی مطمئن باینری‌های Native (سازگار با نسخه Release و اندروید ۱۰+)
+    // مکان‌یابی باینری‌های Native
     // =========================================================================
     private fun getExecutableBinaryPath(binaryName: String): String? {
-        val destinationFile = File(filesDir, "bin_$binaryName")
         val nativeDir = applicationInfo.nativeLibraryDir
         val nativeLib = File(nativeDir, "lib$binaryName.so")
 
-        // در صورت وجود فایل اجرایی قبلی با حجم معتبر
-        if (destinationFile.exists() && destinationFile.length() > 0L) {
-            destinationFile.setExecutable(true, false)
-            return destinationFile.absolutePath
+        if (nativeLib.exists()) {
+            logFlutter("[NativeLoader] Found native binary: ${nativeLib.absolutePath}")
+            return nativeLib.absolutePath
         }
 
-        // ۱. کپی از پوشه jniLibs به پوشه files داخلی جهت دور زدن محدودیت‌های SELinux در Release
-        if (nativeLib.exists() && nativeLib.length() > 0L) {
-            try {
-                nativeLib.inputStream().use { input ->
-                    FileOutputStream(destinationFile).use { output ->
-                        input.copyTo(output)
-                    }
-                }
-                destinationFile.setExecutable(true, false)
-                Runtime.getRuntime().exec("chmod 755 ${destinationFile.absolutePath}").waitFor()
-                logFlutter("[NativeLoader] Copied from nativeLib to filesDir: ${destinationFile.absolutePath}")
-                return destinationFile.absolutePath
-            } catch (e: Exception) {
-                logFlutter("[NativeLoader] Copy from nativeLib failed: ${e.message}")
-            }
-        }
+        val destinationFile = File(filesDir, binaryName)
+        if (!destinationFile.exists() || destinationFile.length() == 0L) {
+            val primaryAbi = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
+            val assetPath = "bin/$primaryAbi/$binaryName"
 
-        // ۲. استخراج به عنوان Fallback از پوشه Assets
-        val primaryAbi = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
-        val possibleAssetPaths = listOf(
-            "bin/$primaryAbi/$binaryName",
-            "bin/$primaryAbi/lib$binaryName.so",
-            "assets/bin/$primaryAbi/$binaryName",
-            binaryName
-        )
-
-        for (assetPath in possibleAssetPaths) {
             try {
                 assets.open(assetPath).use { input ->
                     FileOutputStream(destinationFile).use { output ->
                         input.copyTo(output)
                     }
                 }
-                if (destinationFile.exists() && destinationFile.length() > 0L) {
-                    destinationFile.setExecutable(true, false)
-                    Runtime.getRuntime().exec("chmod 755 ${destinationFile.absolutePath}").waitFor()
-                    logFlutter("[NativeLoader] Extracted from assets ($assetPath) to: ${destinationFile.absolutePath}")
-                    return destinationFile.absolutePath
-                }
-            } catch (_: Exception) {}
-        }
-
-        if (destinationFile.exists() && destinationFile.length() > 0L) {
+                destinationFile.setExecutable(true, false)
+                Runtime.getRuntime().exec("chmod 755 ${destinationFile.absolutePath}").waitFor()
+                logFlutter("[NativeLoader] Extracted fallback binary to: ${destinationFile.absolutePath}")
+            } catch (e: Exception) {
+                logFlutter("[NativeLoader] Extraction error: ${e.message}")
+            }
+        } else {
             destinationFile.setExecutable(true, false)
-            return destinationFile.absolutePath
         }
 
-        return if (nativeLib.exists()) nativeLib.absolutePath else null
-    }
-
-    private fun extractAssetFile(possiblePaths: List<String>, targetFile: File) {
-        if (targetFile.exists() && targetFile.length() > 0L) return
-        for (path in possiblePaths) {
-            try {
-                assets.open(path).use { input ->
-                    FileOutputStream(targetFile).use { output -> input.copyTo(output) }
-                }
-                if (targetFile.exists() && targetFile.length() > 0L) {
-                    logFlutter("[Tor-Init] Prepared asset $path at ${targetFile.absolutePath}")
-                    return
-                }
-            } catch (_: Exception) {}
-        }
+        return if (destinationFile.exists()) destinationFile.absolutePath else nativeLib.absolutePath
     }
 
     private fun prepareTorDataFiles() {
         val torDir = File(filesDir, "tor_data")
         if (!torDir.exists()) torDir.mkdirs()
-        torDir.setReadable(true, false)
-        torDir.setWritable(true, false)
-        torDir.setExecutable(true, false)
-
-        // حذف قفل قبلی در صورت وجود
-        val lockFile = File(torDir, "lock")
-        if (lockFile.exists()) {
-            try { lockFile.delete() } catch (_: Exception) {}
-        }
+        torDir.setReadable(true, true)
+        torDir.setWritable(true, true)
+        torDir.setExecutable(true, true)
 
         val geoipTarget = File(filesDir, "geoip")
         val geoip6Target = File(filesDir, "geoip6")
 
-        extractAssetFile(listOf("tor/geoip", "assets/tor/geoip", "geoip"), geoipTarget)
-        extractAssetFile(listOf("tor/geoip6", "assets/tor/geoip6", "geoip6"), geoip6Target)
+        if (!geoipTarget.exists() || geoipTarget.length() == 0L) {
+            try {
+                assets.open("tor/geoip").use { input ->
+                    FileOutputStream(geoipTarget).use { output -> input.copyTo(output) }
+                }
+                logFlutter("[Tor-Init] geoip database prepared.")
+            } catch (e: Exception) {
+                logFlutter("[Tor-Init] Error extracting geoip: ${e.message}")
+            }
+        }
+
+        if (!geoip6Target.exists() || geoip6Target.length() == 0L) {
+            try {
+                assets.open("tor/geoip6").use { input ->
+                    FileOutputStream(geoip6Target).use { output -> input.copyTo(output) }
+                }
+                logFlutter("[Tor-Init] geoip6 database prepared.")
+            } catch (e: Exception) {
+                logFlutter("[Tor-Init] Error extracting geoip6: ${e.message}")
+            }
+        }
     }
 
     // =========================================================================
@@ -300,7 +270,7 @@ class MainActivity : FlutterActivity() {
 
         val torBinary = getExecutableBinaryPath("tor")
         if (torBinary == null) {
-            logFlutter("[Tor-Error] Could not locate executable tor binary!")
+            logFlutter("[Tor-Error] Could not locate tor binary!")
             return false
         }
 
@@ -321,7 +291,7 @@ class MainActivity : FlutterActivity() {
         torrcContent.append("AvoidDiskWrites 1\n")
         torrcContent.append("Log notice stdout\n")
 
-        // بهینه‌سازی سرعت مدارهای پیازی
+        // بهینه‌سازی سرعت و مصرف مدارها
         torrcContent.append("UseEntryGuards 0\n")
         torrcContent.append("ConnectionPadding 0\n")
         torrcContent.append("ReducedConnectionPadding 1\n")
@@ -334,7 +304,7 @@ class MainActivity : FlutterActivity() {
             torrcContent.append("GeoIPv6File ${geoip6File.absolutePath}\n")
         }
 
-        // عبور ترافیک تور از بستر پل اَتر مسک
+        // زنجیره‌سازی با پراکسی اَتر مسک در صورت وجود
         if (upstreamPort != null && upstreamPort > 0) {
             torrcContent.append("Socks5Proxy 127.0.0.1:$upstreamPort\n")
             logFlutter("[Tor-Config] Chained outbound via Aether SOCKS: 127.0.0.1:$upstreamPort")
@@ -342,12 +312,9 @@ class MainActivity : FlutterActivity() {
 
         when (mode.lowercase()) {
             "snowflake" -> {
-                val snowflakePath = getExecutableBinaryPath("snowflake")
-                if (snowflakePath != null) {
-                    torrcContent.append("UseBridges 1\n")
-                    torrcContent.append("ClientTransportPlugin snowflake exec $snowflakePath\n")
-                    torrcContent.append("Bridge snowflake 192.0.2.3:1 2B280B23E1107BB62ABFC40DDCC82248C5EC2F6E\n")
-                }
+                torrcContent.append("UseBridges 1\n")
+                torrcContent.append("ClientTransportPlugin snowflake exec ${getExecutableBinaryPath("snowflake") ?: "snowflake"}\n")
+                torrcContent.append("Bridge snowflake 192.0.2.3:1 2B280B23E1107BB62ABFC40DDCC82248C5EC2F6E\n")
             }
             "obfs4" -> {
                 val obfsPath = getExecutableBinaryPath("obfs4proxy")
@@ -369,7 +336,7 @@ class MainActivity : FlutterActivity() {
         }
 
         torrcFile.writeText(torrcContent.toString())
-        logFlutter("[Tor-Config] Torrc configuration prepared.")
+        logFlutter("[Tor-Config] Torrc configuration updated.")
 
         val command = listOf(torBinary, "-f", torrcFile.absolutePath)
 
@@ -384,11 +351,11 @@ class MainActivity : FlutterActivity() {
 
             val process = processBuilder.start()
             torProcess = process
-            logFlutter("[Tor-Process] Tor process spawned successfully.")
+            logFlutter("[Tor-Process] Fast Tor spawned successfully")
 
             val bootstrapPattern = Pattern.compile("Bootstrapped\\s+(\\d+)%")
 
-            thread(isDaemon = true) {
+            thread {
                 try {
                     val reader = BufferedReader(InputStreamReader(process.inputStream))
                     reader.forEachLine { line ->
@@ -413,7 +380,7 @@ class MainActivity : FlutterActivity() {
             Thread.sleep(400)
             if (!process.isAlive) {
                 val exitCode = process.exitValue()
-                logFlutter("[Tor-Crash] Tor process died with code: $exitCode")
+                logFlutter("[Tor-Crash] Tor process terminated immediately with exit code: $exitCode")
                 return false
             }
 
@@ -508,7 +475,7 @@ class MainActivity : FlutterActivity() {
             val process = processBuilder.start()
             aetherProcess = process
 
-            thread(isDaemon = true) {
+            thread {
                 try {
                     val reader = BufferedReader(InputStreamReader(process.inputStream))
                     reader.forEachLine { line ->
@@ -562,6 +529,7 @@ class MainActivity : FlutterActivity() {
     private fun testHttpThroughSocks(socksPort: Int, timeoutMs: Int): Boolean {
         return try {
             val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
+            // استفاده از IP مستقیم جهت جلوگیری از شکست DNS محلی حین تست سلامت اتصال
             val url = URL("http://1.1.1.1/generate_204")
             val connection = url.openConnection(proxy) as HttpURLConnection
             connection.connectTimeout = timeoutMs
