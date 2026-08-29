@@ -10,36 +10,25 @@ pluginManagement {
     includeBuild("$flutterSdkPath/packages/flutter_tools/gradle")
 
     repositories {
-        // ۱. ابتدا مخازن رسمی جهت اتصال مستقیم و سریع سرور گیت‌هاب اکشنز
         google()
         mavenCentral()
         gradlePluginPortal()
-
-        // ۲. مخازن آیینه علی‌بابا به عنوان پشتیبان (Fallback) برای دور زدن تحریم‌ها در ویندوز شما
-        maven { url = uri("https://maven.aliyun.com/repository/google") }
-        maven { url = uri("https://maven.aliyun.com/repository/public") }
-        maven { url = uri("https://maven.aliyun.com/repository/gradle-plugin") }
+        maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
     }
 }
 
 plugins {
-    id("dev.flutter.flutter-plugin-loader") version "1.0.0"
+    id("dev.flutter.flutter-gradle-plugin") version "1.0.0"
     id("com.android.application") version "8.9.1" apply false
     id("org.jetbrains.kotlin.android") version "1.9.24" apply false
 }
 
-// هدایت تمام دانلودهای کتابخانه‌ای اندروید به آیینه‌های بدون فیلتر علی‌بابا با حفظ دسترسی به کتابخانه‌های بومی پروژه
 dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.PREFER_PROJECT) // تغییر به PREFER_PROJECT جهت شناسایی فایل بومی libv2ray
+    repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)
     repositories {
-        // ۱. ابتدا مخازن رسمی جهت اتصال مستقیم و سریع سرور گیت‌هاب اکشنز
         google()
         mavenCentral()
-
-        // ۲. مخازن آیینه علی‌بابا به عنوان پشتیبان (Fallback) برای دور زدن تحریم‌ها در ویندوز شما
-        maven { url = uri("https://maven.aliyun.com/repository/google") }
-        maven { url = uri("https://maven.aliyun.com/repository/public") }
-        maven { url = uri("https://maven.aliyun.com/repository/jcenter") }
+        maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
     }
 }
 

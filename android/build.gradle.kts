@@ -1,13 +1,8 @@
 allprojects {
     repositories {
-        // ابتدا مخازن رسمی برای سرورهای خارج و گیت‌هاب
         google()
         mavenCentral()
-        
-        // مخازن آیینه به عنوان پشتیبان برای زمان تحریم در سیستم لوکال
-        maven { url = uri("https://maven.aliyun.com/repository/google") }
-        maven { url = uri("https://maven.aliyun.com/repository/public") }
-        maven { url = uri("https://maven.aliyun.com/repository/jcenter") }
+        maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
     }
 }
 
