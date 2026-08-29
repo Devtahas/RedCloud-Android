@@ -1,14 +1,32 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- دسترسی‌های مورد نیاز اندروید ۱۴ برای اتصال VPN و نمایش نوتیفیکیشن سرویس -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    
+    <!-- دسترسی‌های اینترنت و مانیتورینگ شبکه -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    
+    <!-- دسترسی‌های سرویس پیش‌زمینه و نوتیفیکیشن متناسب با اندروید ۱۳، ۱۴ و ۱۵ -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- 
+        تنظیمات تگ application:
+        ۱. android:extractNativeLibs="true" برای استخراج و اجرای مستقیم باینری‌های کامپایل شده Rust (Aether) و Go (V2Ray).
+        ۲. android:usesCleartextTraffic="true" برای اجازه تبادل داده با پورت لوکال ساکس ۵ (127.0.0.1:1819).
+        ۳. android:enableOnBackInvokedCallback="true" برای ژست‌های حرکتی بازگشت اندروید ۱۴+.
+    -->
     <application
         android:label="redcloud_android"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:extractNativeLibs="true"
+        android:usesCleartextTraffic="true"
+        android:enableOnBackInvokedCallback="true"
+        tools:targetApi="34">
+        
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -18,10 +36,7 @@
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
             android:windowSoftInputMode="adjustResize">
-            <!-- Specifies an Android theme to apply to this Activity as soon as
-                 the Android process has started. This theme is visible to the user
-                 while the Flutter UI initializes. After the Flutter UI renders, the
-                 theme is configured to only area the Window background behind the Flutter UI. -->
+            
             <meta-data
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
@@ -31,14 +46,14 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
-        <!-- Don't delete the meta-data below.
-             This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
+
+        <!-- متادیتای مورد نیاز لایه موتور فلاتر -->
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
     </application>
     
-    <!-- دسترسی سیستمی جهت اجازه باز کردن آدرس وب، تلگرام و ایمیل در اندروید ۱۱ به بالا -->
+    <!-- دسترسی‌های سیستمی جهت باز کردن وب‌سایت، تلگرام و ایمیل پشتیبانی در اندروید ۱۱ به بالا -->
     <queries>
         <intent>
             <action android:name="android.intent.action.VIEW" />
@@ -53,6 +68,10 @@
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="mailto" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="tg" />
         </intent>
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>

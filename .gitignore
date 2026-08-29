@@ -1,45 +1,90 @@
-# Miscellaneous
-*.class
-*.log
-*.pyc
-*.swp
-.DS_Store
-.atom/
-.build/
-.buildlog/
-.history
-.svn/
-.swiftpm/
-migrate_working_dir/
+# =========================================================================
+# ۱. فایل‌های بیلد و کَش موقت فلاتر و دارت (Flutter & Dart)
+# =========================================================================
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+/build/
+**/doc/api/
+**/ios/Flutter/.last_build_id
+/coverage/
 
-# IntelliJ related
+# فوت‌پرینت‌ها و فایل‌های نگاشت کدهای فلاتر
+app.*.symbols
+app.*.map.json
+
+# =========================================================================
+# ۲. فایل‌های محیط اندروید و گرِیدل (Android & Gradle)
+# =========================================================================
+.gradle/
+**/android/.gradle/
+**/android/build/
+**/android/app/build/
+**/android/app/debug/
+**/android/app/profile/
+**/android/app/release/
+android/local.properties
+**/android/local.properties
+**/android/captures/
+**/android/.cxx/
+
+# کلیدهای امنیتی و فایل‌های امضای اختصاصی (جهت امنیت پروژه)
+*.keystore
+*.jks
+key.properties
+
+# =========================================================================
+# ۳. لاگ‌ها و فایل‌های خطایابی موقت (Crash & Run Logs)
+# =========================================================================
+*.log
+hs_err_pid*
+replay_pid*
+red.txt
+log.txt
+*.tmp
+*.bak
+
+# =========================================================================
+# ۴. فایل‌های محیط توسعه و ادیتورها (VS Code & IntelliJ / Android Studio)
+# =========================================================================
+.idea/
 *.iml
 *.ipr
 *.iws
-.idea/
+.project
+.classpath
+.settings/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
 
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
-#.vscode/
+# =========================================================================
+# ۵. فایل‌های موقت سیستم‌عامل‌ها (Windows, macOS, Linux)
+# =========================================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+[Dd]esktop.ini
 
-# Flutter/Dart/Pub related
-**/doc/api/
-**/ios/Flutter/.last_build_id
-.dart_tool/
-.flutter-plugins-dependencies
-.pub-cache/
-.pub/
-/build/
-/coverage/
-
-# Symbolication related
-app.*.symbols
-
-# Obfuscation related
-app.*.map.json
-
-# Android Studio will place build artifacts here
-/android/app/debug
-/android/app/profile
-/android/app/release
+# =========================================================================
+# ۶. استثنائات حیاتی (مواردی که حتماً باید در گیت‌هاب آپلود شوند)
+# =========================================================================
+!assets/
+!assets/**
+!assets/images/
+!assets/DNS.txt
+!assets/cloudflare_IPs.txt
+!assets/tor/
+!assets/bin/**
+!android/app/src/main/jniLibs/**
+!android/gradle/wrapper/gradle-wrapper.jar

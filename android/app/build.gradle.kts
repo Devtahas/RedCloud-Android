@@ -16,38 +16,46 @@ android {
     defaultConfig {
         applicationId = "com.redcloud.vpn.redcloud_android"
         
-        // تنظیم حداقل نسخه اندروید روی نسخه 21 (اندروید 5)
+        // حداقل نسخه اندروید ۵ (API 21)
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        // معماری‌های پردازنده پشتیبانی شده برای باینری‌های Native
+        ndk {
+            abiFilters.addAll(setOf("x86_64", "armeabi-v7a", "arm64-v8a"))
+        }
     }
 
-    // بهینه‌سازی و تفکیک فایل‌های خروجی (APK Splits) برای معماری‌های مختلف پردازنده
-    splits {
-        abi {
-            isEnable = true
-            reset()
-            include("x86_64", "armeabi-v7a", "arm64-v8a")
-            isUniversalApk = true
+    // اتصال پوشه jniLibs برای بسته‌بندی کتابخانه‌های بومی هسته Aether و V2Ray
+    sourceSets {
+        getByName("main") {
+            jniLibs.srcDirs("src/main/jniLibs")
         }
     }
 
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("debug")
-            
-            // اعمال فیلترهای معماری پردازنده‌ها
-            ndk {
-                abiFilters.addAll(setOf("x86_64", "armeabi-v7a", "arm64-v8a"))
-            }
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 
-    // تنظیم نحوه بسته‌بندی کتابخانه‌های بومی هسته Go متناسب با نسخه‌های جدید اندروید و گریدل
+    // تنظیمات بسته‌بندی باینری‌های Native جهت ممانعت از کرش و خطای W^X در اندروید ۱۰ به بالا
     packaging {
         jniLibs {
             useLegacyPackaging = true
+        }
+        resources {
+            excludes += setOf(
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE",
+                "META-INF/LICENSE.txt",
+                "META-INF/NOTICE",
+                "META-INF/NOTICE.txt"
+            )
         }
     }
 }
@@ -61,4 +69,3 @@ kotlin {
 flutter {
     source = "../.."
 }
-
