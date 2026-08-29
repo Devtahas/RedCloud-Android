@@ -21,11 +21,6 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-
-        // معماری‌های پردازنده پشتیبانی شده برای باینری‌های Native
-        ndk {
-            abiFilters.addAll(setOf("x86_64", "armeabi-v7a", "arm64-v8a"))
-        }
     }
 
     // اتصال پوشه jniLibs برای بسته‌بندی کتابخانه‌های بومی هسته Aether و V2Ray
@@ -43,7 +38,7 @@ android {
         }
     }
 
-    // تنظیمات بسته‌بندی باینری‌های Native جهت ممانعت از کرش و خطای W^X در اندروید ۱۰ به بالا
+    // تنظیمات بسته‌بندی باینری‌های Native جهت ممانعت از کرش در اندروید ۱۰ به بالا
     packaging {
         jniLibs {
             useLegacyPackaging = true
