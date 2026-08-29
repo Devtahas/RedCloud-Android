@@ -53,12 +53,12 @@ jobs:
       - name: Build Universal APK
         run: |
           echo "[*] Building Universal APK..."
-          flutter build apk --release
+          flutter build apk --release --android-skip-build-dependency-validation
 
       - name: Build ABI-Split APKs
         run: |
           echo "[*] Building Split-per-ABI APKs..."
-          flutter build apk --release --split-per-abi
+          flutter build apk --release --split-per-abi --android-skip-build-dependency-validation
 
       - name: Organize Build Artifacts
         run: |
