@@ -130,7 +130,6 @@ class _HomePageState extends State<HomePage> {
   String _fullConfigJson = "";
   String _remark = "RedCloud Server";
 
-  // اعلان بنر هوشمند بالای صفحه با زمان‌بندی ۵ ثانیه‌ای
   String? _bannerMessage;
   Color _bannerColor = const Color(0xFF3B82F6);
   IconData _bannerIcon = Icons.info_outline_rounded;
@@ -244,7 +243,7 @@ class _HomePageState extends State<HomePage> {
       "tor_mode_custom_desc": "ورود خطوط پل‌های اختصاصی شما",
       "tor_connected_banner": "شبکه تور فعال است (کل دستگاه ناشناس و تونل شد)",
       "tor_start_err": "خطا در برقراری ارتباط با شبکه تور؛ اتصال اینترنت را چک کنید.",
-      "tor_custom_bridge_hint": "خطوط پل (Bridge lines) را اینجا وارد کنید...",
+      "tor_custom_bridge_hint": "Enter bridge lines here...",
       "tor_building_circuits": "در حال ساخت مدارهای امن: ",
 
       "tor_step_cleanup": "آزادسازی پورت‌ها و ریست هسته‌ها...",
@@ -445,7 +444,6 @@ class _HomePageState extends State<HomePage> {
       final InternetAddress targetAddress = InternetAddress(ip.trim());
       socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
       
-      // پکت استاندارد پرس‌وجوی DNS برای google.com (A Record)
       final List<int> dnsQuery = [
         0x12, 0x34,
         0x01, 0x00,
@@ -479,11 +477,13 @@ class _HomePageState extends State<HomePage> {
               final int o4 = data[len - 1];
 
               // فیلتر کردن مسمومیت DNS و صفحات فیلترینگ ایران (10.10.34.x و 10.x.x.x و رنج‌های لوکال)
-              final bool isPoisoned = (o1 == 10) || 
+              final bool isPoisoned = (o1 == 10 && o2 == 10 && o3 == 34) ||
+                                     (o1 == 10) || 
                                      (o1 == 127) || 
                                      (o1 == 0) || 
                                      (o1 == 192 && o2 == 168) || 
-                                     (o1 == 172 && o2 >= 16 && o2 <= 31);
+                                     (o1 == 172 && o2 >= 16 && o2 <= 31) ||
+                                     (o1 == 0 && o2 == 0 && o3 == 0 && o4 == 0);
 
               if (!isPoisoned && !completer.isCompleted) {
                 completer.complete({
@@ -632,7 +632,6 @@ class _HomePageState extends State<HomePage> {
           final octets = baseIp.split('.');
           if (octets.length == 4) {
             final prefix = "${octets[0]}.${octets[1]}.${octets[2]}";
-            // استخراج ۵۰ هاست با فواصل منظم از هر ساب‌نت
             for (int host = 1; host <= 250; host += 5) {
               candidateIps.add("$prefix.$host");
             }
@@ -668,7 +667,6 @@ class _HomePageState extends State<HomePage> {
     String bestIP = "";
     int bestLatency = 9999;
     
-    // ۱. اسکن سریع اولیه روی لیست پیش‌فرض
     final fastPool = _defaultCloudflareIPs;
     final List<Future<MapEntry<String, int>>> fastTasks = fastPool.map((ip) {
       return _testIpLayer7(ip, host, path, timeoutMs: 1400).then((latency) => MapEntry(ip, latency ?? 9999));
@@ -691,7 +689,6 @@ class _HomePageState extends State<HomePage> {
       return bestIP;
     }
 
-    // ۲. ورود به حالت فال‌بک بزرگ و نمایش بنر ۵ ثانیه‌ای
     _showBannerNotification(
       _t("banner_cf_fallback"),
       color: const Color(0xFFF59E0B),
@@ -1024,7 +1021,7 @@ class _HomePageState extends State<HomePage> {
         } catch (_) {}
       });
 
-      for (int i = 0; i < 140; i++) {
+      for (int i = 0; i < 180; i++) {
         await Future.delayed(const Duration(milliseconds: 500));
         final bool socksReady = await _torChannel.invokeMethod('checkTorReady', {
           'socksPort': 9050,
@@ -1322,9 +1319,9 @@ class _HomePageState extends State<HomePage> {
       builder: (context) {
         return AlertDialog(
           backgroundColor: const Color(0xFF1E293B),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-            side: const BorderSide(color: Color(0xFF3B82F6), width: 1.2),
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.all(Radius.circular(20)),
+            side: BorderSide(color: Color(0xFF3B82F6), width: 1.2),
           ),
           title: const Row(
             children: [
@@ -1536,6 +1533,9 @@ class _HomePageState extends State<HomePage> {
       await _disconnectTor();
     }
 
+    await flutterV2ray.stopV2Ray();
+    await Future.delayed(const Duration(milliseconds: 300));
+
     if (_fetchedAccounts.isEmpty && !_serversUpdatingMode) {
       await _fetchAndLoadAccounts();
     }
@@ -1636,6 +1636,9 @@ class _HomePageState extends State<HomePage> {
     return "${num.toStringAsFixed(1)} ${suffixes[i]}${isSpeed ? '/s' : ''}";
   }
 
+  // =========================================================================
+  // ساختار اصلی و کاملاً سالم کانفیگ V2Ray (دقیقاً بر اساس نسخه پایدار پیام ۱۱)
+  // =========================================================================
   void _parseAndSaveConfig(String link, {bool updateUI = true}) {
     if (link.isEmpty) return;
     
@@ -1696,7 +1699,10 @@ class _HomePageState extends State<HomePage> {
       }
 
       configMap['dns'] = {
-        "servers": _activeVerifiedDnsList,
+        "servers": [
+          ..._activeVerifiedDnsList,
+          "localhost"
+        ],
         "queryStrategy": "UseIP"
       };
 
@@ -1835,7 +1841,6 @@ class _HomePageState extends State<HomePage> {
         ),
         body: Column(
           children: [
-            // بنر ۵ ثانیه‌ای هوشمند و انیمیشنی اطلاع‌رسانی
             if (_bannerMessage != null)
               AnimatedContainer(
                 duration: const Duration(milliseconds: 350),
