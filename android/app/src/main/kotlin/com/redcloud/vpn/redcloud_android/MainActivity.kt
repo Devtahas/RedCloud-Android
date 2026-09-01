@@ -1,11 +1,18 @@
 package com.redcloud.vpn.redcloud_android
 
+import android.annotation.SuppressLint
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import android.util.Log
 import androidx.annotation.NonNull
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.File
 import java.io.FileOutputStream
@@ -15,49 +22,125 @@ import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.Socket
 import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
 import java.util.regex.Pattern
 import kotlin.concurrent.thread
 
 class MainActivity : FlutterActivity() {
-    private val TAG = "flutter"
-    private val AETHER_CHANNEL = "com.redcloud.vpn/aether_channel"
-    private val TOR_CHANNEL = "com.redcloud.vpn/tor_channel"
+    
+    companion object {
+        private const val TAG = "RedCloudNative"
+        private const val AETHER_CHANNEL = "com.redcloud.vpn/aether_channel"
+        private const val TOR_CHANNEL = "com.redcloud.vpn/tor_channel"
 
-    private var aetherProcess: Process? = null
-    private var torProcess: Process? = null
+        @Volatile
+        private var aetherProcess: Process? = null
 
-    @Volatile
-    private var torBootstrapPercent: Int = 0
+        @Volatile
+        private var torProcess: Process? = null
 
-    @Volatile
-    private var torLastLogLine: String = "آماده‌سازی"
+        @Volatile
+        private var torBootstrapPercent: Int = 0
 
-    private val torLogsBuffer = ConcurrentLinkedQueue<String>()
+        @Volatile
+        private var torLastLogLine: String = "آماده‌سازی"
 
-    private fun logFlutter(message: String) {
-        Log.i(TAG, message)
+        private const val MAX_NATIVE_LOGS = 400
+        private val nativeLogsBuffer = ConcurrentLinkedQueue<String>()
+
+        @Volatile
+        private var wakeLock: PowerManager.WakeLock? = null
+
+        fun appendNativeLog(tag: String, message: String) {
+            val timestamp = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date())
+            val formattedLog = "[$timestamp] [$tag] $message"
+            Log.i(TAG, formattedLog)
+
+            while (nativeLogsBuffer.size >= MAX_NATIVE_LOGS) {
+                nativeLogsBuffer.poll()
+            }
+            nativeLogsBuffer.offer(formattedLog)
+        }
+    }
+
+    @SuppressLint("WakelockTimeout")
+    private fun acquireWakeLock() {
+        try {
+            if (wakeLock == null) {
+                val powerManager = applicationContext.getSystemService(Context.POWER_SERVICE) as PowerManager
+                wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "RedCloudVPN::CoreWakeLock")
+                wakeLock?.setReferenceCounted(false)
+            }
+            if (wakeLock?.isHeld == false) {
+                wakeLock?.acquire()
+                appendNativeLog("Power", "قفل پردازنده (WakeLock) فعال شد؛ پروسس‌ها در پس‌زمینه پایدار خواهند ماند.")
+            }
+        } catch (e: Exception) {
+            appendNativeLog("PowerError", "خطا در دریافت WakeLock: ${e.message}")
+        }
+    }
+
+    private fun releaseWakeLock() {
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+                appendNativeLog("Power", "قفل پردازنده (WakeLock) آزاد شد.")
+            }
+        } catch (e: Exception) {
+            appendNativeLog("PowerError", "خطا در آزادسازی WakeLock: ${e.message}")
+        }
+    }
+
+    private fun isIgnoringBatteryOptimizations(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val powerManager = applicationContext.getSystemService(Context.POWER_SERVICE) as PowerManager
+            powerManager.isIgnoringBatteryOptimizations(packageName)
+        } else {
+            true
+        }
+    }
+
+    @SuppressLint("BatteryLife")
+    private fun requestIgnoreBatteryOptimizations() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !isIgnoringBatteryOptimizations()) {
+            try {
+                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                    data = Uri.parse("package:$packageName")
+                }
+                startActivity(intent)
+                appendNativeLog("Power", "درخواست غیرفعال‌سازی بهینه‌سازی باتری ارسال شد.")
+            } catch (e: Exception) {
+                try {
+                    val fallbackIntent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                    startActivity(fallbackIntent)
+                } catch (_: Exception) {}
+            }
+        }
     }
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
         // =========================================================================
-        // ۱. کانال متد اَتر (Aether Engine)
+        // ۱. کانال متد هسته اَتر (Aether Engine)
         // =========================================================================
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, AETHER_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "startAether" -> {
                     val mode = call.argument<String>("mode") ?: "auto"
                     val port = call.argument<Int>("port") ?: 1819
-                    val noize = call.argument<String>("noize") ?: "firewall"
+                    val noize = call.argument<String>("noize")
                     val customArgs = call.argument<List<String>>("args") ?: emptyList()
 
                     thread {
                         val launched = startAetherEngine(mode, port, noize, customArgs)
                         runOnUiThread {
                             if (launched) {
+                                acquireWakeLock()
                                 result.success(true)
                             } else {
                                 result.error("START_FAILED", "امکان اجرای باینری Aether وجود ندارد", null)
@@ -68,6 +151,9 @@ class MainActivity : FlutterActivity() {
 
                 "stopAether" -> {
                     stopAetherEngine()
+                    if (torProcess == null || torProcess?.isAlive == false) {
+                        releaseWakeLock()
+                    }
                     result.success(true)
                 }
 
@@ -80,10 +166,8 @@ class MainActivity : FlutterActivity() {
                     val timeoutMs = call.argument<Int>("timeoutMs") ?: 1500
 
                     thread {
-                        val isReady = testSocksPort(port, timeoutMs)
-                        runOnUiThread {
-                            result.success(isReady)
-                        }
+                        val isReady = testSocksPort("Aether", port, timeoutMs)
+                        runOnUiThread { result.success(isReady) }
                     }
                 }
 
@@ -93,35 +177,68 @@ class MainActivity : FlutterActivity() {
 
                     thread {
                         val canPassTraffic = testHttpThroughSocks(port, timeoutMs)
-                        runOnUiThread {
-                            result.success(canPassTraffic)
-                        }
+                        runOnUiThread { result.success(canPassTraffic) }
+                    }
+                }
+
+                "getTunneledIpInfo" -> {
+                    val port = call.argument<Int>("socksPort") ?: 1819
+                    val timeoutMs = call.argument<Int>("timeoutMs") ?: 6000
+
+                    thread {
+                        val info = fetchTunneledIp(port, timeoutMs)
+                        runOnUiThread { result.success(info) }
                     }
                 }
 
                 "resetIdentity" -> {
                     val mode = call.argument<String>("mode")
-                    if (mode != null) {
-                        val modeDir = File(filesDir, "identity_${mode.lowercase()}")
-                        if (modeDir.exists()) modeDir.deleteRecursively()
-                    } else {
-                        filesDir.listFiles()?.forEach { file ->
-                            if (file.name.startsWith("identity_") || file.name == "tor_data") {
-                                file.deleteRecursively()
+                    thread {
+                        try {
+                            if (mode != null) {
+                                val modeDir = File(filesDir, "identity_${mode.lowercase()}")
+                                if (modeDir.exists()) modeDir.deleteRecursively()
+                                appendNativeLog("Aether", "دایرکتوری هویت برای حالت $mode بازنشانی شد.")
+                            } else {
+                                filesDir.listFiles()?.forEach { file ->
+                                    if (file.name.startsWith("identity_") || file.name == "tor_data") {
+                                        file.deleteRecursively()
+                                    }
+                                }
+                                appendNativeLog("Aether", "تمام هویت‌ها و فایل‌های کش پاک‌سازی شدند.")
                             }
+                            runOnUiThread { result.success(true) }
+                        } catch (e: Exception) {
+                            appendNativeLog("Error", "خطا در ریست هویت: ${e.message}")
+                            runOnUiThread { result.error("RESET_ERR", e.message, null) }
                         }
                     }
+                }
+
+                "isIgnoringBatteryOptimizations" -> {
+                    result.success(isIgnoringBatteryOptimizations())
+                }
+
+                "requestIgnoreBatteryOptimizations" -> {
+                    requestIgnoreBatteryOptimizations()
                     result.success(true)
                 }
 
-                else -> {
-                    result.notImplemented()
+                "getNativeLogs" -> {
+                    result.success(ArrayList(nativeLogsBuffer))
                 }
+
+                "clearNativeLogs" -> {
+                    nativeLogsBuffer.clear()
+                    result.success(true)
+                }
+
+                else -> result.notImplemented()
             }
         }
 
         // =========================================================================
-        // ۲. کانال متد تور (Tor Engine)
+        // ۲. کانال متد هسته تور (Tor Engine)
         // =========================================================================
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, TOR_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
@@ -133,12 +250,12 @@ class MainActivity : FlutterActivity() {
 
                     torBootstrapPercent = 0
                     torLastLogLine = "در حال راه‌اندازی هسته تور..."
-                    torLogsBuffer.clear()
 
                     thread {
                         val launched = startTorEngine(socksPort, upstreamPort, mode, customBridges)
                         runOnUiThread {
                             if (launched) {
+                                acquireWakeLock()
                                 result.success(true)
                             } else {
                                 result.error("TOR_START_FAILED", "خطا در استارت باینری تور", null)
@@ -149,6 +266,9 @@ class MainActivity : FlutterActivity() {
 
                 "stopTor" -> {
                     stopTorEngine()
+                    if (aetherProcess == null || aetherProcess?.isAlive == false) {
+                        releaseWakeLock()
+                    }
                     result.success(true)
                 }
 
@@ -157,12 +277,10 @@ class MainActivity : FlutterActivity() {
                 }
 
                 "getTorStatus" -> {
-                    val recentLogs = ArrayList(torLogsBuffer)
                     val statusMap = mapOf(
                         "percent" to torBootstrapPercent,
                         "lastLog" to torLastLogLine,
-                        "isRunning" to (torProcess?.isAlive == true),
-                        "logs" to recentLogs
+                        "isRunning" to (torProcess?.isAlive == true)
                     )
                     result.success(statusMap)
                 }
@@ -172,44 +290,66 @@ class MainActivity : FlutterActivity() {
                     val timeoutMs = call.argument<Int>("timeoutMs") ?: 1200
 
                     thread {
-                        val isReady = testSocksPort(socksPort, timeoutMs)
-                        runOnUiThread {
-                            result.success(isReady)
-                        }
+                        val isReady = testSocksPort("Tor", socksPort, timeoutMs)
+                        runOnUiThread { result.success(isReady) }
+                    }
+                }
+
+                "getTunneledIpInfo" -> {
+                    val port = call.argument<Int>("socksPort") ?: 9050
+                    val timeoutMs = call.argument<Int>("timeoutMs") ?: 7000
+
+                    thread {
+                        val info = fetchTunneledIp(port, timeoutMs)
+                        runOnUiThread { result.success(info) }
                     }
                 }
 
                 "killAllCores" -> {
+                    appendNativeLog("Lifecycle", "متوقف‌سازی تمام هسته‌ها و آزادسازی پورت‌ها توسط درخواست کاربر...")
                     stopTorEngine()
                     stopAetherEngine()
+                    releaseWakeLock()
                     result.success(true)
                 }
 
-                else -> {
-                    result.notImplemented()
+                "isIgnoringBatteryOptimizations" -> {
+                    result.success(isIgnoringBatteryOptimizations())
                 }
+
+                "requestIgnoreBatteryOptimizations" -> {
+                    requestIgnoreBatteryOptimizations()
+                    result.success(true)
+                }
+
+                "getNativeLogs" -> {
+                    result.success(ArrayList(nativeLogsBuffer))
+                }
+
+                "clearNativeLogs" -> {
+                    nativeLogsBuffer.clear()
+                    result.success(true)
+                }
+
+                else -> result.notImplemented()
             }
         }
     }
 
-    // =========================================================================
-    // مکان‌یابی مستقیم و مطمئن باینری‌های Native
-    // =========================================================================
     private fun getExecutableBinaryPath(binaryName: String): String? {
         val nativeDir = applicationInfo.nativeLibraryDir
         val nativeLib = File(nativeDir, "lib$binaryName.so")
 
-        // ۱. اولویت اول: اجرای مستقیم از دایرکتوری رسمی jniLibs داخل APK
         if (nativeLib.exists() && nativeLib.length() > 0L) {
             nativeLib.setExecutable(true, false)
-            logFlutter("[NativeLoader] Found native binary in libDir: ${nativeLib.absolutePath}")
+            appendNativeLog("NativeLoader", "یافتن باینری در libDir: ${nativeLib.absolutePath} (${nativeLib.length()} bytes)")
             return nativeLib.absolutePath
         }
 
-        // ۲. اولویت دوم: استخراج یا کپی در دایرکتوری محلی فایل‌ها
         val destinationFile = File(filesDir, binaryName)
         if (destinationFile.exists() && destinationFile.length() > 0L) {
             destinationFile.setExecutable(true, false)
+            appendNativeLog("NativeLoader", "استفاده از باینری موجود در filesDir: ${destinationFile.absolutePath}")
             return destinationFile.absolutePath
         }
 
@@ -224,21 +364,20 @@ class MainActivity : FlutterActivity() {
         for (assetPath in possibleAssetPaths) {
             try {
                 assets.open(assetPath).use { input ->
-                    FileOutputStream(destinationFile).use { output ->
-                        input.copyTo(output)
-                    }
+                    FileOutputStream(destinationFile).use { output -> input.copyTo(output) }
                 }
                 if (destinationFile.exists() && destinationFile.length() > 0L) {
                     destinationFile.setExecutable(true, false)
                     try {
                         Runtime.getRuntime().exec("chmod 755 ${destinationFile.absolutePath}").waitFor()
                     } catch (_: Exception) {}
-                    logFlutter("[NativeLoader] Extracted fallback asset $assetPath to: ${destinationFile.absolutePath}")
+                    appendNativeLog("NativeLoader", "استخراج باینری از $assetPath به ${destinationFile.absolutePath}")
                     return destinationFile.absolutePath
                 }
             } catch (_: Exception) {}
         }
 
+        appendNativeLog("NativeLoader", "هشدار: باینری $binaryName در هیچ مسیری یافت نشد.")
         return if (nativeLib.exists()) nativeLib.absolutePath else null
     }
 
@@ -250,7 +389,7 @@ class MainActivity : FlutterActivity() {
                     FileOutputStream(targetFile).use { output -> input.copyTo(output) }
                 }
                 if (targetFile.exists() && targetFile.length() > 0L) {
-                    logFlutter("[Tor-Init] Prepared asset $path at ${targetFile.absolutePath}")
+                    appendNativeLog("TorInit", "فایل دارایی آماده شد: $path -> ${targetFile.absolutePath}")
                     return
                 }
             } catch (_: Exception) {}
@@ -266,7 +405,10 @@ class MainActivity : FlutterActivity() {
 
         val lockFile = File(torDir, "lock")
         if (lockFile.exists()) {
-            try { lockFile.delete() } catch (_: Exception) {}
+            try {
+                lockFile.delete()
+                appendNativeLog("TorInit", "فایل lock قدیمی تور حذف شد.")
+            } catch (_: Exception) {}
         }
 
         val geoipTarget = File(filesDir, "geoip")
@@ -276,16 +418,13 @@ class MainActivity : FlutterActivity() {
         extractAssetFile(listOf("tor/geoip6", "assets/tor/geoip6", "geoip6"), geoip6Target)
     }
 
-    // =========================================================================
-    // اجرای هسته تور (Tor Engine)
-    // =========================================================================
     private fun startTorEngine(socksPort: Int, upstreamPort: Int?, mode: String, customBridges: List<String>): Boolean {
         stopTorEngine()
         prepareTorDataFiles()
 
         val torBinary = getExecutableBinaryPath("tor")
         if (torBinary == null) {
-            logFlutter("[Tor-Error] Could not locate executable tor binary!")
+            appendNativeLog("TorError", "عدم دسترسی به باینری tor. فایل libtor.so را بررسی کنید.")
             return false
         }
 
@@ -305,7 +444,6 @@ class MainActivity : FlutterActivity() {
         torrcContent.append("ClientOnly 1\n")
         torrcContent.append("AvoidDiskWrites 1\n")
         torrcContent.append("Log notice stdout\n")
-
         torrcContent.append("UseEntryGuards 0\n")
         torrcContent.append("ConnectionPadding 0\n")
         torrcContent.append("ReducedConnectionPadding 1\n")
@@ -320,7 +458,7 @@ class MainActivity : FlutterActivity() {
 
         if (upstreamPort != null && upstreamPort > 0) {
             torrcContent.append("Socks5Proxy 127.0.0.1:$upstreamPort\n")
-            logFlutter("[Tor-Config] Chained outbound via Aether SOCKS: 127.0.0.1:$upstreamPort")
+            appendNativeLog("TorConfig", "اتصال تور از بستر پراکسی بالادستی ساکس: 127.0.0.1:$upstreamPort")
         }
 
         when (mode.lowercase()) {
@@ -330,6 +468,7 @@ class MainActivity : FlutterActivity() {
                     torrcContent.append("UseBridges 1\n")
                     torrcContent.append("ClientTransportPlugin snowflake exec $snowflakePath\n")
                     torrcContent.append("Bridge snowflake 192.0.2.3:1 2B280B23E1107BB62ABFC40DDCC82248C5EC2F6E\n")
+                    appendNativeLog("TorConfig", "پلاگین Snowflake فعال شد.")
                 }
             }
             "obfs4" -> {
@@ -337,6 +476,7 @@ class MainActivity : FlutterActivity() {
                 if (obfsPath != null) {
                     torrcContent.append("UseBridges 1\n")
                     torrcContent.append("ClientTransportPlugin obfs4 exec $obfsPath\n")
+                    appendNativeLog("TorConfig", "پلاگین obfs4 فعال شد.")
                 }
             }
             "custom" -> {
@@ -347,13 +487,12 @@ class MainActivity : FlutterActivity() {
                             torrcContent.append("Bridge ${bridge.trim()}\n")
                         }
                     }
+                    appendNativeLog("TorConfig", "تعداد ${customBridges.size} پل اختصاصی تزریق شد.")
                 }
             }
         }
 
         torrcFile.writeText(torrcContent.toString())
-        logFlutter("[Tor-Config] Torrc configuration prepared.")
-
         val command = listOf(torBinary, "-f", torrcFile.absolutePath)
 
         return try {
@@ -367,7 +506,7 @@ class MainActivity : FlutterActivity() {
 
             val process = processBuilder.start()
             torProcess = process
-            logFlutter("[Tor-Process] Tor process spawned successfully.")
+            appendNativeLog("TorProcess", "پروسس تور با موفقیت آغاز شد.")
 
             val bootstrapPattern = Pattern.compile("Bootstrapped\\s+(\\d+)%")
 
@@ -376,8 +515,7 @@ class MainActivity : FlutterActivity() {
                     val reader = BufferedReader(InputStreamReader(process.inputStream))
                     reader.forEachLine { line ->
                         torLastLogLine = line
-                        if (torLogsBuffer.size > 20) torLogsBuffer.poll()
-                        torLogsBuffer.offer(line)
+                        appendNativeLog("TorCore", line)
 
                         val matcher = bootstrapPattern.matcher(line)
                         if (matcher.find()) {
@@ -386,24 +524,22 @@ class MainActivity : FlutterActivity() {
                                 torBootstrapPercent = percent
                             }
                         }
-                        logFlutter("[Tor-Log]: $line")
                     }
                 } catch (e: Exception) {
-                    logFlutter("[Tor-Reader-Error]: ${e.message}")
+                    appendNativeLog("TorReaderError", "خطا در خواندن لاگ تور: ${e.message}")
                 }
             }
 
             Thread.sleep(400)
             if (!process.isAlive) {
                 val exitCode = process.exitValue()
-                logFlutter("[Tor-Crash] Tor process died with code: $exitCode")
+                appendNativeLog("TorCrash", "پروسس تور متوقف شد با کد خروج: $exitCode")
                 return false
             }
 
             true
         } catch (e: Exception) {
-            logFlutter("[Tor-Error] Launch failed: ${e.message}")
-            e.printStackTrace()
+            appendNativeLog("TorError", "خطا در اجرای تور: ${e.message}")
             false
         }
     }
@@ -412,15 +548,16 @@ class MainActivity : FlutterActivity() {
         try {
             torProcess?.let { process ->
                 if (process.isAlive) {
+                    appendNativeLog("TorLifecycle", "در حال توقف هسته تور...")
                     process.destroy()
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         process.destroyForcibly()
-                        process.waitFor(500, TimeUnit.MILLISECONDS)
+                        process.waitFor(300, TimeUnit.MILLISECONDS)
                     }
                 }
             }
         } catch (e: Exception) {
-            logFlutter("[Tor-Stop-Error]: ${e.message}")
+            appendNativeLog("TorStopError", "خطا در توقف تور: ${e.message}")
         } finally {
             torProcess = null
             torBootstrapPercent = 0
@@ -428,26 +565,37 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    // =========================================================================
-    // اجرای هسته اتر (Aether Engine)
-    // =========================================================================
-    private fun startAetherEngine(mode: String, port: Int, noize: String, extraArgs: List<String>): Boolean {
+    private fun startAetherEngine(mode: String, port: Int, customNoize: String?, extraArgs: List<String>): Boolean {
         stopAetherEngine()
 
-        val binaryPath = getExecutableBinaryPath("aether") ?: return false
+        val binaryPath = getExecutableBinaryPath("aether") ?: run {
+            appendNativeLog("AetherError", "باینری aether یافت نشد.")
+            return false
+        }
+
+        val normalizedMode = mode.lowercase()
+        val modeDir = File(filesDir, "identity_$normalizedMode")
+        if (!modeDir.exists()) {
+            modeDir.mkdirs()
+        }
+
+        // پاک‌سازی فایل‌های کَش فاسد شده
+        try {
+            modeDir.listFiles()?.forEach { file ->
+                if (file.name.endsWith(".toml") || file.name.contains("cache") || file.name.contains("endpoint")) {
+                    file.delete()
+                    appendNativeLog("AetherClean", "کَش قدیمی اندپوینت حذف شد: ${file.name}")
+                }
+            }
+        } catch (_: Exception) {}
+
         val command = mutableListOf<String>()
         command.add(binaryPath)
         command.add("--bind")
         command.add("127.0.0.1:$port")
         command.add("-4")
-        command.add("--turbo")
-        command.add("--quick-reconnect")
-        command.add("--noize")
-        command.add(noize)
-
-        val normalizedMode = mode.lowercase()
-        val modeDir = File(filesDir, "identity_$normalizedMode")
-        if (!modeDir.exists()) modeDir.mkdirs()
+        command.add("--startup-secs")
+        command.add("30")
 
         when (normalizedMode) {
             "auto", "masque_h2", "h2" -> {
@@ -457,28 +605,43 @@ class MainActivity : FlutterActivity() {
                 command.add("16-32")
                 command.add("--fragment-delay")
                 command.add("2-8")
+                command.add("--noize")
+                command.add(customNoize ?: "firewall")
+                command.add("--turbo")
             }
-            "masque", "masque_h3" -> {
+            "masque", "masque_h3", "quic" -> {
                 command.add("--masque")
+                command.add("--noize")
+                command.add(customNoize ?: "quic")
+                command.add("--turbo")
             }
             "wireguard", "wg" -> {
                 command.add("--wireguard")
+                command.add("--noize")
+                command.add(customNoize ?: "gfw")
                 command.add("--keepalive")
-                command.add("5")
+                command.add("25")
+                command.add("--turbo")
             }
             "gool", "warp_in_warp" -> {
                 command.add("--gool")
+                command.add("--noize")
+                command.add(customNoize ?: "firewall")
                 command.add("--keepalive")
-                command.add("5")
+                command.add("25")
+                command.add("--turbo")
             }
             else -> {
                 command.add("--h2")
                 command.add("--fragment")
+                command.add("--noize")
+                command.add("firewall")
+                command.add("--turbo")
             }
         }
 
         command.addAll(extraArgs)
-        logFlutter("[Aether-Cmd]: ${command.joinToString(" ")}")
+        appendNativeLog("AetherCommand", command.joinToString(" "))
 
         return try {
             val processBuilder = ProcessBuilder(command)
@@ -491,25 +654,27 @@ class MainActivity : FlutterActivity() {
 
             val process = processBuilder.start()
             aetherProcess = process
+            appendNativeLog("AetherProcess", "پروسس اَتر شروع شد.")
 
             thread(isDaemon = true) {
                 try {
                     val reader = BufferedReader(InputStreamReader(process.inputStream))
                     reader.forEachLine { line ->
-                        logFlutter("[Aether-Log]: $line")
+                        appendNativeLog("AetherCore", line)
                     }
                 } catch (_: Exception) {}
             }
 
-            Thread.sleep(300)
+            Thread.sleep(400)
             if (!process.isAlive) {
-                logFlutter("[Aether-Crash] Process died with code: ${process.exitValue()}")
+                val exitCode = process.exitValue()
+                appendNativeLog("AetherCrash", "اَتر با کد خروج متوقف شد: $exitCode")
                 return false
             }
 
             true
         } catch (e: Exception) {
-            logFlutter("[Aether-Error] Failed to start: ${e.message}")
+            appendNativeLog("AetherError", "خطا در استارت Aether: ${e.message}")
             false
         }
     }
@@ -518,32 +683,39 @@ class MainActivity : FlutterActivity() {
         try {
             aetherProcess?.let { process ->
                 if (process.isAlive) {
+                    appendNativeLog("AetherLifecycle", "در حال توقف هسته اَتر...")
                     process.destroy()
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         process.destroyForcibly()
-                        process.waitFor(500, TimeUnit.MILLISECONDS)
+                        process.waitFor(400, TimeUnit.MILLISECONDS)
                     }
                 }
             }
         } catch (e: Exception) {
-            logFlutter("[Aether-Stop-Error]: ${e.message}")
+            appendNativeLog("AetherStopError", "خطا در توقف اَتر: ${e.message}")
         } finally {
             aetherProcess = null
         }
     }
 
-    private fun testSocksPort(port: Int, timeoutMs: Int): Boolean {
+    private fun testSocksPort(engineName: String, port: Int, timeoutMs: Int): Boolean {
+        val start = System.currentTimeMillis()
         return try {
             Socket().use { socket ->
                 socket.connect(InetSocketAddress("127.0.0.1", port), timeoutMs)
+                val elapsed = System.currentTimeMillis() - start
+                appendNativeLog("Probe", "$engineName ساکس پورت $port آماده است (${elapsed}ms)")
                 true
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            val elapsed = System.currentTimeMillis() - start
+            appendNativeLog("Probe", "$engineName پورت $port هنوز آماده نیست (${elapsed}ms)")
             false
         }
     }
 
     private fun testHttpThroughSocks(socksPort: Int, timeoutMs: Int): Boolean {
+        val start = System.currentTimeMillis()
         return try {
             val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
             val url = URL("http://1.1.1.1/generate_204")
@@ -554,17 +726,95 @@ class MainActivity : FlutterActivity() {
             connection.requestMethod = "GET"
             val responseCode = connection.responseCode
             connection.disconnect()
-            logFlutter("[Aether-Probe] Egress HTTP probe status code: $responseCode")
-            responseCode in 200..399
+            val elapsed = System.currentTimeMillis() - start
+            val success = responseCode in 200..399
+            appendNativeLog("Probe", "تست گذردهی واقعی ترافیک اَتر -> کد: $responseCode (${elapsed}ms)")
+            success
         } catch (e: Exception) {
-            logFlutter("[Aether-Probe] Egress HTTP probe failed: ${e.message}")
+            val elapsed = System.currentTimeMillis() - start
+            appendNativeLog("Probe", "تست گذردهی ترافیک اَتر ناموفق بود (${elapsed}ms): ${e.message}")
             false
         }
     }
 
+    // =========================================================================
+    // دریافت اطلاعات دقیق آی‌پی و پینگ خروجی مستقیم از تانل ساکس ۵
+    // =========================================================================
+    private fun fetchTunneledIp(socksPort: Int, timeoutMs: Int): Map<String, Any>? {
+        val start = System.currentTimeMillis()
+        return try {
+            val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
+            val url = URL("http://ip-api.com/json/")
+            val connection = url.openConnection(proxy) as HttpURLConnection
+            connection.connectTimeout = timeoutMs
+            connection.readTimeout = timeoutMs
+            connection.requestMethod = "GET"
+            connection.instanceFollowRedirects = true
+
+            if (connection.responseCode in 200..299) {
+                val responseText = connection.inputStream.bufferedReader().use { it.readText() }
+                val elapsed = (System.currentTimeMillis() - start).toInt()
+                connection.disconnect()
+
+                val jsonObj = JSONObject(responseText)
+                if (jsonObj.optString("status") == "success") {
+                    mapOf(
+                        "ip" to jsonObj.optString("query"),
+                        "country" to jsonObj.optString("country"),
+                        "countryCode" to jsonObj.optString("countryCode"),
+                        "pingMs" to elapsed
+                    )
+                } else {
+                    null
+                }
+            } else {
+                connection.disconnect()
+                null
+            }
+        } catch (e: Exception) {
+            // فال‌بک دوم از طریق Cloudflare CDN Trace با ساکس ۵
+            try {
+                val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
+                val url = URL("https://cloudflare.com/cdn-cgi/trace")
+                val connection = url.openConnection(proxy) as HttpURLConnection
+                connection.connectTimeout = timeoutMs
+                connection.readTimeout = timeoutMs
+                connection.requestMethod = "GET"
+
+                if (connection.responseCode in 200..299) {
+                    val responseText = connection.inputStream.bufferedReader().use { it.readText() }
+                    val elapsed = (System.currentTimeMillis() - start).toInt()
+                    connection.disconnect()
+
+                    var ip = ""
+                    var loc = ""
+                    responseText.lines().forEach { line ->
+                        if (line.startsWith("ip=")) ip = line.substring(3).trim()
+                        if (line.startsWith("loc=")) loc = line.substring(4).trim()
+                    }
+
+                    if (ip.isNotEmpty()) {
+                        mapOf(
+                            "ip" to ip,
+                            "country" to loc,
+                            "countryCode" to loc,
+                            "pingMs" to elapsed
+                        )
+                    } else null
+                } else {
+                    connection.disconnect()
+                    null
+                }
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+
     override fun onDestroy() {
-        stopAetherEngine()
-        stopTorEngine()
+        appendNativeLog("Lifecycle", "اکتیویتی به پس‌زمینه رفت یا متوقف شد؛ هسته‌ها تا زمان قطع صریح کاربر زنده می‌مانند.")
+        // فرآیندها و WakeLock در اینجا کشته نمی‌شوند تا اتصال VPN در پس‌زمینه پایدار بماند.
+        // خاموش‌سازی هسته‌ها صرفاً با فشردن دکمه Disconnect از طریق متد killAllCores یا stop انجام می‌شود.
         super.onDestroy()
     }
 }

@@ -19,7 +19,7 @@
         ۳. android:enableOnBackInvokedCallback="true" برای ژست‌های حرکتی بازگشت اندروید ۱۴+.
     -->
     <application
-        android:label="redcloud_android"
+        android:label="RedCloud VPN"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:extractNativeLibs="true"

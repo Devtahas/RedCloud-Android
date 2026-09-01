@@ -19,32 +19,153 @@ const String githubRawUrl = "https://raw.githubusercontent.com/Devtahas/Devtahas
 const String telegramChannelUrl = "https://t.me/DevTaha_project";
 const String usdtBnbAddress = "0xDeda28Aa73Ec089A77B3fC616E0011a8fce12900";
 
-void main() {
+// شناسه پکیج اندروید برنامه جهت جداسازی سوکت‌های بومی از تونل VPN
+const String appPackageName = "com.redcloud.vpn.redcloud_android";
+
+enum ActiveEngine { none, dashboard, aether, tor }
+
+// =========================================================================
+// ساختار مدیریت لاگینگ یکپارچه، سبک و بدون افت فریم (AppLogger Engine)
+// =========================================================================
+class LogEntry {
+  final DateTime time;
+  final String tag;
+  final String message;
+  final bool isError;
+
+  LogEntry({
+    required this.time,
+    required this.tag,
+    required this.message,
+    this.isError = false,
+  });
+
+  String format() {
+    final h = time.hour.toString().padLeft(2, '0');
+    final m = time.minute.toString().padLeft(2, '0');
+    final s = time.second.toString().padLeft(2, '0');
+    final ms = time.millisecond.toString().padLeft(3, '0');
+    return "[$h:$m:$s.$ms] [$tag] $message";
+  }
+}
+
+class AppLogger {
+  static final List<LogEntry> _logs = [];
+  static final ValueNotifier<int> logCountNotifier = ValueNotifier<int>(0);
+  static const int maxLogs = 500;
+
+  static void log(String tag, String message, {bool isError = false}) {
+    final entry = LogEntry(
+      time: DateTime.now(),
+      tag: tag,
+      message: message,
+      isError: isError,
+    );
+
+    if (kDebugMode) {
+      print(entry.format());
+    }
+
+    if (_logs.length >= maxLogs) {
+      _logs.removeAt(0);
+    }
+    _logs.add(entry);
+    logCountNotifier.value = _logs.length;
+  }
+
+  static void addNativeLog(String rawLine) {
+    final isErr = rawLine.toLowerCase().contains("error") || 
+                  rawLine.toLowerCase().contains("fail") || 
+                  rawLine.toLowerCase().contains("crash") ||
+                  rawLine.toLowerCase().contains("aborted");
+    final entry = LogEntry(
+      time: DateTime.now(),
+      tag: "NATIVE",
+      message: rawLine,
+      isError: isErr,
+    );
+    if (_logs.length >= maxLogs) {
+      _logs.removeAt(0);
+    }
+    _logs.add(entry);
+    logCountNotifier.value = _logs.length;
+  }
+
+  static List<LogEntry> get currentLogs => List.unmodifiable(_logs);
+
+  static void clear() {
+    _logs.clear();
+    logCountNotifier.value = 0;
+  }
+
+  static String getAllLogsFormatted() {
+    return _logs.map((e) => e.format()).join("\n");
+  }
+}
+
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const MyApp());
+  
+  // خواندن تنظیمات اولیه زبان و تم از حافظه پایدار قبل از اجرای برنامه
+  final SharedPreferences prefs = await SharedPreferences.getInstance();
+  final String initialLang = prefs.getString('saved_app_language') ?? 'fa';
+  final bool initialDarkMode = prefs.getBool('saved_dark_mode') ?? true;
+  final bool isFirstRun = prefs.getBool('first_launch_lang_selected') != true;
+
+  AppLogger.log("SYSTEM", "RedCloud VPN Starting initialized.");
+  runApp(MyApp(
+    initialLang: initialLang,
+    initialDarkMode: initialDarkMode,
+    isFirstRun: isFirstRun,
+  ));
 }
 
 class MyApp extends StatefulWidget {
-  const MyApp({super.key});
+  final String initialLang;
+  final bool initialDarkMode;
+  final bool isFirstRun;
+
+  const MyApp({
+    super.key,
+    required this.initialLang,
+    required this.initialDarkMode,
+    required this.isFirstRun,
+  });
 
   @override
   State<MyApp> createState() => _MyAppState();
 }
 
 class _MyAppState extends State<MyApp> {
-  bool _isDarkMode = true;
-  String _currentLang = "fa";
+  late bool _isDarkMode;
+  late String _currentLang;
 
-  void _toggleTheme() {
+  @override
+  void initState() {
+    super.initState();
+    _isDarkMode = widget.initialDarkMode;
+    _currentLang = widget.initialLang;
+  }
+
+  void _toggleTheme() async {
     setState(() {
       _isDarkMode = !_isDarkMode;
     });
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('saved_dark_mode', _isDarkMode);
+    } catch (_) {}
   }
 
-  void _changeLang(String lang) {
+  void _changeLang(String lang) async {
     setState(() {
       _currentLang = lang;
     });
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      await prefs.setString('saved_app_language', lang);
+      await prefs.setBool('first_launch_lang_selected', true);
+    } catch (_) {}
   }
 
   @override
@@ -64,6 +185,7 @@ class _MyAppState extends State<MyApp> {
       home: HomePage(
         isDarkMode: _isDarkMode,
         currentLang: _currentLang,
+        isFirstRun: widget.isFirstRun,
         toggleTheme: _toggleTheme,
         changeLang: _changeLang,
       ),
@@ -74,6 +196,7 @@ class _MyAppState extends State<MyApp> {
 class HomePage extends StatefulWidget {
   final bool isDarkMode;
   final String currentLang;
+  final bool isFirstRun;
   final VoidCallback toggleTheme;
   final Function(String) changeLang;
 
@@ -81,6 +204,7 @@ class HomePage extends StatefulWidget {
     super.key,
     required this.isDarkMode,
     required this.currentLang,
+    required this.isFirstRun,
     required this.toggleTheme,
     required this.changeLang,
   });
@@ -94,17 +218,39 @@ class _HomePageState extends State<HomePage> {
   static const MethodChannel _torChannel = MethodChannel('com.redcloud.vpn/tor_channel');
 
   final ValueNotifier<V2RayStatus> v2rayStatus = ValueNotifier<V2RayStatus>(V2RayStatus());
+  
+  ActiveEngine _activeEngine = ActiveEngine.none;
+  bool _isTransitioning = false;
+  bool _bypassIran = true;
+
   Timer? _logTimer;
   Timer? _reportTimer;
   Timer? _torProgressTimer;
   Timer? _bannerTimer;
   int _currentTabIndex = 0;
+
+  // اطلاعات تلمتری و موقعیت زنده آی‌پی خروجی فیلترشکن
+  String? _publicIp;
+  String? _ipCountry;
+  String? _ipCountryCode;
+  String? _ipFlagEmoji;
+  int? _realPingMs;
+  bool _isTestingIp = false;
   
   late final V2ray flutterV2ray = V2ray(
     onStatusChanged: (status) {
       v2rayStatus.value = status;
-      
-      if (!_isAetherActive && !_isTorActive && status.state == "CONNECTED" && _selectedAccountIndex >= 0) {
+      if (status.state == "CONNECTED" && _activeEngine != ActiveEngine.none) {
+        if (_publicIp == null && !_isTestingIp) {
+          Timer(const Duration(milliseconds: 1500), () {
+            if (mounted && _activeEngine != ActiveEngine.none && !_isTestingIp) {
+              _fetchPublicIpAndPing();
+            }
+          });
+        }
+      }
+
+      if (_activeEngine == ActiveEngine.dashboard && status.state == "CONNECTED" && _selectedAccountIndex >= 0) {
         _checkAndAutoSwitchLimit(
           _fetchedAccounts[_selectedAccountIndex], 
           status.download + status.upload,
@@ -134,15 +280,8 @@ class _HomePageState extends State<HomePage> {
   Color _bannerColor = const Color(0xFF3B82F6);
   IconData _bannerIcon = Icons.info_outline_rounded;
 
-  // متغیرهای اختصاصی هسته اَتر (Aether Engine)
   String _selectedAetherMode = "auto";
-  bool _isAetherConnecting = false;
-  bool _isAetherActive = false;
-
-  // متغیرهای اختصاصی هسته تور (Tor Engine)
   String _selectedTorMode = "aether_masque";
-  bool _isTorConnecting = false;
-  bool _isTorActive = false;
   int _torBootstrapProgress = 0;
   String _torStepStatus = "آماده اتصال";
   int _torCurrentStep = 0;
@@ -150,7 +289,6 @@ class _HomePageState extends State<HomePage> {
   int _lastSentDownload = 0;
   int _lastSentUpload = 0;
   final int _maxDailyBytes = 5 * 1024 * 1024 * 1024;
-  
   final Set<String> _locallyExhaustedWorkers = {};
 
   final List<String> _defaultCloudflareIPs = [
@@ -224,7 +362,7 @@ class _HomePageState extends State<HomePage> {
       "mode_gool_desc": "دو لایه وایرگارد تودرتو برای بالاترین ضریب عبور",
       "mode_wireguard_title": "WireGuard (WARP)",
       "mode_wireguard_desc": "پروتکل وایرگارد مستقیم کلودفلر با مصرف بهینه باتری",
-      "aether_launching": "در حال اسکن و آزمایش خودکار پروتکل‌های ضدسانسور...",
+      "aether_launching": "در حال راه‌اندازی و آزمایش خودکار پروتکل‌های ضدسانسور...",
       "aether_connected_banner": "تونل اَتر فعال است (کل گوشی تونل شد)",
       "aether_start_err": "خطا در راه‌اندازی هسته اَتر؛ لطفاً مجدداً تلاش کنید.",
 
@@ -257,6 +395,27 @@ class _HomePageState extends State<HomePage> {
       "tor_layer_aether": "پل اَتر مسک (MASQUE)",
       "tor_layer_tor": "مدارهای پیازی تور (Tor)",
       "tor_layer_vpn": "تونل کل دستگاه (V2Ray TUN)",
+
+      "logs_title": "گزارشات و لاگ‌های سیستم",
+      "logs_subtitle": "رویدادهای زنده، وضعیت هسته‌ها و عیب‌یابی خطاها",
+      "logs_view_btn": "مشاهده و مدیریت لاگ‌ها",
+      "logs_empty": "هنوز هیچ لاگی در سیستم ثبت نشده است.",
+      "logs_copied": "تمام لاگ‌های سیستم در کلیپ‌بورد کپی شد!",
+      "logs_cleared": "تمامی لاگ‌ها با موفقیت پاک‌سازی شدند.",
+      "logs_copy_all": "کپی تمام لاگ‌ها",
+      "logs_clear_all": "پاک‌سازی لاگ‌ها",
+      "logs_search_hint": "جستجو در میان لاگ‌ها...",
+
+      "battery_opt_title": "بهینه‌سازی باتری و پایداری در پس‌زمینه",
+      "battery_opt_desc": "جهت جلوگیری از قطع شدن اتصال پس از چند دقیقه در پس‌زمینه، بهینه‌سازی باتری را برای برنامه خاموش کنید.",
+      "battery_opt_btn": "تنظیم عدم محدودیت باتری (Unrestricted)",
+
+      "bypass_iran_title": "بایپس سایت‌های ایرانی (Bypass Iran)",
+      "bypass_iran_desc": "عبور مستقیم سایت‌های داخلی (.ir)، بانکی و دولتی بدون فیلترشکن",
+
+      "testing_ip_info": "در حال دریافت مشخصات سرور خروجی...",
+      "live_ping_label": "پینگ زنده",
+      "public_ip_label": "آی‌پی سرور",
     },
     "en": {
       "app_title": "RedCloud VPN",
@@ -352,11 +511,264 @@ class _HomePageState extends State<HomePage> {
       "tor_layer_aether": "Aether MASQUE Bridge",
       "tor_layer_tor": "Tor Onion Circuits",
       "tor_layer_vpn": "Full Device Tunnel",
+
+      "logs_title": "System Logs & Diagnostics",
+      "logs_subtitle": "Live events, debug traces & error logs",
+      "logs_view_btn": "View System Logs",
+      "logs_empty": "No logs recorded yet.",
+      "logs_copied": "All logs copied to clipboard!",
+      "logs_cleared": "Logs cleared successfully.",
+      "logs_copy_all": "Copy All Logs",
+      "logs_clear_all": "Clear Logs",
+      "logs_search_hint": "Search inside logs...",
+
+      "battery_opt_title": "Battery Optimization & Background Stability",
+      "battery_opt_desc": "Disable battery optimization for this app to prevent Android from closing the connection after 10 minutes in the background.",
+      "battery_opt_btn": "Set Battery to Unrestricted",
+
+      "bypass_iran_title": "Bypass Domestic Sites (Bypass Iran)",
+      "bypass_iran_desc": "Direct routing for .ir domains and domestic banking traffic without VPN",
+
+      "testing_ip_info": "Discovering exit server info...",
+      "live_ping_label": "Live Ping",
+      "public_ip_label": "Server IP",
     }
   };
 
   String _t(String key) {
     return _localizedValues[widget.currentLang]?[key] ?? _localizedValues["en"]?[key] ?? key;
+  }
+
+  String _countryCodeToEmoji(String countryCode) {
+    if (countryCode.length != 2) return "🌐";
+    final int firstLetter = countryCode.toUpperCase().codeUnitAt(0) - 0x41 + 0x1F1E6;
+    final int secondLetter = countryCode.toUpperCase().codeUnitAt(1) - 0x41 + 0x1F1E6;
+    return String.fromCharCode(firstLetter) + String.fromCharCode(secondLetter);
+  }
+
+  // =========================================================================
+  // پروتکل مستقیم و خالص SOCKS5 در دارت (بدون نیاز به کد نیتیو و بدون کرش)
+  // =========================================================================
+  Future<Map<String, dynamic>?> _querySocks5Json(int socksPort, String targetHost, String path, {int timeoutMs = 6000}) async {
+    final stopwatch = Stopwatch()..start();
+    Socket? socket;
+    try {
+      socket = await Socket.connect('127.0.0.1', socksPort, timeout: Duration(milliseconds: timeoutMs));
+
+      // ۱. ارسال احراز هویت اولیه SOCKS5
+      socket.add([0x05, 0x01, 0x00]);
+      await socket.flush();
+
+      final completer = Completer<Map<String, dynamic>?>();
+      final List<int> buffer = [];
+      int stage = 0;
+
+      socket.listen((data) {
+        buffer.addAll(data);
+
+        if (stage == 0) {
+          // پاسخ احراز هویت SOCKS5: [0x05, 0x00]
+          if (buffer.length >= 2) {
+            if (buffer[0] == 0x05 && buffer[1] == 0x00) {
+              buffer.clear();
+              stage = 1;
+              // ۲. درخواست CONNECT به دامنه‌ی مقصد روی پورت ۸۰
+              final hostBytes = utf8.encode(targetHost);
+              final connectReq = [
+                0x05, 0x01, 0x00, 0x03, hostBytes.length, ...hostBytes, 0x00, 0x50
+              ];
+              socket?.add(connectReq);
+              socket?.flush();
+            } else {
+              if (!completer.isCompleted) completer.complete(null);
+            }
+          }
+        } else if (stage == 1) {
+          // پاسخ تایید اتصال SOCKS5: [0x05, 0x00, 0x00, ...]
+          if (buffer.length >= 10) {
+            if (buffer[0] == 0x05 && buffer[1] == 0x00) {
+              buffer.clear();
+              stage = 2;
+              // ۳. ارسال درخواست خام HTTP
+              final httpRequest = "GET $path HTTP/1.1\r\n"
+                  "Host: $targetHost\r\n"
+                  "User-Agent: Mozilla/5.0 (Android; Linux)\r\n"
+                  "Connection: close\r\n\r\n";
+              socket?.add(utf8.encode(httpRequest));
+              socket?.flush();
+            } else {
+              if (!completer.isCompleted) completer.complete(null);
+            }
+          }
+        } else if (stage == 2) {
+          // دریافت دیتای HTTP خروجی از تانل
+          final responseText = utf8.decode(buffer, allowMalformed: true);
+          if (responseText.contains("\r\n\r\n")) {
+            final parts = responseText.split("\r\n\r\n");
+            if (parts.length > 1) {
+              final jsonPart = parts.sublist(1).join("\r\n\r\n").trim();
+              try {
+                final Map<String, dynamic> parsed = jsonDecode(jsonPart);
+                stopwatch.stop();
+                parsed['pingMs'] = stopwatch.elapsedMilliseconds;
+                if (!completer.isCompleted) completer.complete(parsed);
+                return;
+              } catch (_) {}
+            }
+          }
+        }
+      }, onError: (_) {
+        if (!completer.isCompleted) completer.complete(null);
+      }, onDone: () {
+        if (!completer.isCompleted) completer.complete(null);
+      });
+
+      Timer(Duration(milliseconds: timeoutMs), () {
+        if (!completer.isCompleted) completer.complete(null);
+      });
+
+      return await completer.future;
+    } catch (_) {
+      return null;
+    } finally {
+      try { socket?.destroy(); } catch (_) {}
+    }
+  }
+
+  Future<void> _fetchPublicIpAndPing() async {
+    if (_activeEngine == ActiveEngine.none) return;
+
+    if (mounted) {
+      setState(() {
+        _isTestingIp = true;
+        _publicIp = null;
+        _ipCountry = null;
+        _ipCountryCode = null;
+        _ipFlagEmoji = null;
+        _realPingMs = null;
+      });
+    }
+
+    int targetSocksPort = 10808; // پیش‌فرض داشبورد V2Ray
+    if (_activeEngine == ActiveEngine.aether) targetSocksPort = 1819;
+    if (_activeEngine == ActiveEngine.tor) targetSocksPort = 9050;
+
+    try {
+      // استعلام اول از ip-api.com
+      Map<String, dynamic>? data = await _querySocks5Json(targetSocksPort, "ip-api.com", "/json/", timeoutMs: 4000);
+      
+      // فال‌بک دوم از سرویس ipwho.is در صورت عدم پاسخ‌دهی سرور اول
+      if (data == null || data['status'] != 'success') {
+        await Future.delayed(const Duration(milliseconds: 300));
+        final fallbackData = await _querySocks5Json(targetSocksPort, "ipwho.is", "/", timeoutMs: 4500);
+        if (fallbackData != null && (fallbackData['success'] == true || fallbackData['ip'] != null)) {
+          data = {
+            'status': 'success',
+            'query': fallbackData['ip'],
+            'country': fallbackData['country'],
+            'countryCode': fallbackData['country_code'],
+            'pingMs': fallbackData['pingMs'] ?? 0,
+          };
+        }
+      }
+
+      if (data != null && data['status'] == 'success' && mounted) {
+        final ip = data['query']?.toString() ?? '';
+        final country = data['country']?.toString() ?? '';
+        final countryCode = data['countryCode']?.toString() ?? '';
+        final ping = data['pingMs'] as int? ?? 0;
+
+        if (ip.isNotEmpty) {
+          setState(() {
+            _publicIp = ip;
+            _ipCountry = country.isNotEmpty ? country : "Connected Server";
+            _ipCountryCode = countryCode;
+            _ipFlagEmoji = _countryCodeToEmoji(countryCode);
+            _realPingMs = ping;
+            _isTestingIp = false;
+          });
+          AppLogger.log("TELEMETRY", "Exit Server IP: $_publicIp ($_ipCountry $_ipFlagEmoji) | Latency: ${ping}ms");
+          return;
+        }
+      }
+    } catch (e) {
+      AppLogger.log("TELEMETRY", "خطا در استعلام آی‌پی: $e");
+    } finally {
+      if (mounted && _isTestingIp) {
+        setState(() {
+          _isTestingIp = false;
+        });
+      }
+    }
+  }
+
+  void _showFirstLaunchLanguageModal() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return WillPopScope(
+          onWillPop: () async => false,
+          child: AlertDialog(
+            backgroundColor: const Color(0xFF1E293B),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+              side: const BorderSide(color: Color(0xFF3B82F6), width: 1.5),
+            ),
+            title: const Row(
+              children: [
+                Icon(Icons.language_rounded, color: Color(0xFF3B82F6), size: 28),
+                SizedBox(width: 10),
+                Text(
+                  "زبان / Language",
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  "لطفاً زبان پیش‌فرض برنامه را انتخاب کنید:\nPlease select your preferred app language:",
+                  style: TextStyle(fontSize: 13, color: Colors.white70, height: 1.5),
+                ),
+                const SizedBox(height: 20),
+                ListTile(
+                  tileColor: const Color(0xFF0F172A),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: const BorderSide(color: Colors.white12),
+                  ),
+                  leading: const Text("🇮🇷", style: TextStyle(fontSize: 24)),
+                  title: const Text("فارسی (Persian)", style: TextStyle(fontWeight: FontWeight.bold)),
+                  trailing: const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+                  onTap: () {
+                    widget.changeLang("fa");
+                    Navigator.pop(dialogContext);
+                  },
+                ),
+                const SizedBox(height: 10),
+                ListTile(
+                  tileColor: const Color(0xFF0F172A),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: const BorderSide(color: Colors.white12),
+                  ),
+                  leading: const Text("🇬🇧", style: TextStyle(fontSize: 24)),
+                  title: const Text("English (انگلیسی)", style: TextStyle(fontWeight: FontWeight.bold)),
+                  trailing: const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+                  onTap: () {
+                    widget.changeLang("en");
+                    Navigator.pop(dialogContext);
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   void _showBannerNotification(String message, {Color color = const Color(0xFF3B82F6), IconData icon = Icons.info_outline_rounded}) {
@@ -390,34 +802,127 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
+    AppLogger.log("CORE", "Initializing Flutter V2Ray plugin...");
     flutterV2ray.initialize(
       notificationIconResourceType: "mipmap",
       notificationIconResourceName: "ic_launcher",
     );
-
     _initApp();
+
+    if (widget.isFirstRun) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _showFirstLaunchLanguageModal();
+      });
+    }
+  }
+
+  Future<void> _saveEngineState(ActiveEngine engine) async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      await prefs.setString('active_engine_state', engine.name);
+    } catch (_) {}
+  }
+
+  Future<void> _loadBypassIranSetting() async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      final bool? savedBypass = prefs.getBool('bypass_iran_traffic');
+      if (savedBypass != null && mounted) {
+        setState(() {
+          _bypassIran = savedBypass;
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _setBypassIranSetting(bool value) async {
+    setState(() {
+      _bypassIran = value;
+    });
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('bypass_iran_traffic', value);
+      AppLogger.log("ROUTING", "وضعیت بایپس ایران تغییر کرد: $value");
+    } catch (_) {}
+
+    if (_selectedAccountIndex >= 0 && _selectedAccountIndex < _fetchedAccounts.length) {
+      _updateSelectedConfig();
+    }
+  }
+
+  Future<void> _restoreSavedState() async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      final String? savedState = prefs.getString('active_engine_state');
+      if (savedState != null) {
+        final ActiveEngine engine = ActiveEngine.values.firstWhere(
+          (e) => e.name == savedState,
+          orElse: () => ActiveEngine.none,
+        );
+
+        if (engine != ActiveEngine.none) {
+          bool aetherAlive = false;
+          bool torAlive = false;
+          try { 
+            aetherAlive = await _aetherChannel.invokeMethod('isAetherRunning') ?? false; 
+          } catch (_) {}
+          try { 
+            torAlive = await _torChannel.invokeMethod('isTorRunning') ?? false; 
+          } catch (_) {}
+
+          if (engine == ActiveEngine.aether && aetherAlive) {
+            if (mounted) {
+              setState(() => _activeEngine = ActiveEngine.aether);
+            }
+            AppLogger.log("STATE", "وضعیت اتصال اَتر از پس‌زمینه با موفقیت بازیابی شد.");
+          } else if (engine == ActiveEngine.tor && torAlive) {
+            if (mounted) {
+              setState(() => _activeEngine = ActiveEngine.tor);
+            }
+            AppLogger.log("STATE", "وضعیت اتصال تور از پس‌زمینه با موفقیت بازیابی شد.");
+          } else if (engine == ActiveEngine.dashboard) {
+            if (mounted) {
+              setState(() => _activeEngine = ActiveEngine.dashboard);
+            }
+            AppLogger.log("STATE", "وضعیت اتصال داشبورد از پس‌زمینه با موفقیت بازیابی شد.");
+          }
+        }
+      }
+    } catch (e) {
+      AppLogger.log("STATE", "خطا در بازیابی وضعیت پس‌زمینه: $e");
+    }
   }
 
   Future<void> _initApp() async {
+    await _loadBypassIranSetting();
     await _loadExhaustedWorkers();
     await _fetchAndLoadAccounts();
+    await _restoreSavedState();
 
-    if (kDebugMode) {
-      _logTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
-        try {
-          final List<String> logs = await flutterV2ray.getLogs();
-          if (logs.isNotEmpty) {
-            for (var log in logs) {
-              print("[Core Log]: $log");
-            }
-            await flutterV2ray.clearLogs();
+    _logTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
+      try {
+        final List<String> v2Logs = await flutterV2ray.getLogs();
+        if (v2Logs.isNotEmpty) {
+          for (var log in v2Logs) {
+            AppLogger.log("V2RAY-CORE", log);
           }
-        } catch (_) {}
-      });
-    }
+          await flutterV2ray.clearLogs();
+        }
+      } catch (_) {}
+
+      try {
+        final dynamic rawNativeLogs = await _torChannel.invokeMethod('getNativeLogs');
+        if (rawNativeLogs is List && rawNativeLogs.isNotEmpty) {
+          for (var nLog in rawNativeLogs) {
+            AppLogger.addNativeLog(nLog.toString());
+          }
+          await _torChannel.invokeMethod('clearNativeLogs');
+        }
+      } catch (_) {}
+    });
 
     _reportTimer = Timer.periodic(const Duration(minutes: 10), (timer) {
-      if (!_isAetherActive && !_isTorActive) {
+      if (_activeEngine == ActiveEngine.dashboard) {
         _reportDeltaUsage();
       }
     });
@@ -435,6 +940,15 @@ class _HomePageState extends State<HomePage> {
     super.dispose();
   }
 
+  Future<void> _resetAllEngines() async {
+    _torProgressTimer?.cancel();
+    await flutterV2ray.stopV2Ray();
+    try { await _torChannel.invokeMethod('killAllCores'); } catch (_) {}
+    try { await _aetherChannel.invokeMethod('stopAether'); } catch (_) {}
+    await _saveEngineState(ActiveEngine.none);
+    await Future.delayed(const Duration(milliseconds: 300));
+  }
+
   // =========================================================================
   // الگوریتم پکت خام UDP جهت تست و فیلتر کردن مسمومیت دی‌ان‌اس (DNS Anti-Poisoning)
   // =========================================================================
@@ -445,17 +959,10 @@ class _HomePageState extends State<HomePage> {
       socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
       
       final List<int> dnsQuery = [
-        0x12, 0x34,
-        0x01, 0x00,
-        0x00, 0x01,
-        0x00, 0x00,
-        0x00, 0x00,
-        0x00, 0x00,
-        0x06, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65,
-        0x03, 0x63, 0x6f, 0x6d,
-        0x00,
-        0x00, 0x01,
-        0x00, 0x01
+        0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x06, 0x67, 0x6f, 0x6f,
+        0x67, 0x6c, 0x65, 0x03, 0x63, 0x6f, 0x6d, 0x00,
+        0x00, 0x01, 0x00, 0x01
       ];
 
       final stopwatch = Stopwatch()..start();
@@ -476,16 +983,14 @@ class _HomePageState extends State<HomePage> {
               final int o3 = data[len - 2];
               final int o4 = data[len - 1];
 
-              // فیلتر کردن مسمومیت DNS و صفحات فیلترینگ ایران (10.10.34.x و 10.x.x.x و رنج‌های لوکال)
               final bool isPoisoned = (o1 == 10 && o2 == 10 && o3 == 34) ||
-                                     (o1 == 10) || 
-                                     (o1 == 127) || 
-                                     (o1 == 0) || 
+                                     (o1 == 10) || (o1 == 127) || (o1 == 0) || 
                                      (o1 == 192 && o2 == 168) || 
                                      (o1 == 172 && o2 >= 16 && o2 <= 31) ||
                                      (o1 == 0 && o2 == 0 && o3 == 0 && o4 == 0);
 
               if (!isPoisoned && !completer.isCompleted) {
+                AppLogger.log("DNS-PROBE", "Clean DNS: $ip (${stopwatch.elapsedMilliseconds} ms)");
                 completer.complete({
                   'ip': ip,
                   'latency': stopwatch.elapsedMilliseconds,
@@ -494,19 +999,28 @@ class _HomePageState extends State<HomePage> {
               }
             }
           }
-          if (!completer.isCompleted) completer.complete(null);
+          if (!completer.isCompleted) {
+            completer.complete(null);
+          }
         }
       }, onError: (_) {
-        if (!completer.isCompleted) completer.complete(null);
+        if (!completer.isCompleted) {
+          completer.complete(null);
+        }
+      }, onDone: () {
+        if (!completer.isCompleted) {
+          completer.complete(null);
+        }
       });
 
       Timer(Duration(milliseconds: timeoutMs), () {
-        if (!completer.isCompleted) completer.complete(null);
+        if (!completer.isCompleted) {
+          completer.complete(null);
+        }
       });
 
-      final result = await completer.future;
-      return result;
-    } catch (_) {
+      return await completer.future;
+    } catch (e) {
       return null;
     } finally {
       try { socket?.close(); } catch (_) {}
@@ -514,6 +1028,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<List<String>> _runDnsRescueScan() async {
+    AppLogger.log("DNS-RESCUE", "Starting DNS rescue probe...");
     List<String> candidates = [];
     try {
       final String dnsContent = await rootBundle.loadString('assets/DNS.txt');
@@ -546,12 +1061,16 @@ class _HomePageState extends State<HomePage> {
           verified.add(res);
         }
       }
-      if (verified.length >= 4) break;
+      if (verified.length >= 4) {
+        break;
+      }
     }
 
     verified.sort((a, b) => (a['latency'] as int).compareTo(b['latency'] as int));
     if (verified.isNotEmpty) {
-      return verified.map((e) => e['ip'] as String).toList();
+      final finalDns = verified.map((e) => e['ip'] as String).toList();
+      AppLogger.log("DNS-RESCUE", "Rescue successful. Active DNS: $finalDns");
+      return finalDns;
     }
     return ["8.8.8.8", "9.9.9.9", "1.1.1.1"];
   }
@@ -565,7 +1084,6 @@ class _HomePageState extends State<HomePage> {
     SecureSocket? secureSocket;
     try {
       rawSocket = await Socket.connect(ip, 443, timeout: Duration(milliseconds: timeoutMs));
-      
       secureSocket = await SecureSocket.secure(
         rawSocket,
         host: host,
@@ -586,27 +1104,35 @@ class _HomePageState extends State<HomePage> {
       await secureSocket.flush();
 
       final completer = Completer<int?>();
-
       secureSocket.listen((data) {
         final response = String.fromCharCodes(data);
         if (response.startsWith("HTTP/1.1 101") || response.startsWith("HTTP/1.0 101")) {
           stopwatch.stop();
-          if (!completer.isCompleted) completer.complete(stopwatch.elapsedMilliseconds);
+          if (!completer.isCompleted) {
+            completer.complete(stopwatch.elapsedMilliseconds);
+          }
         } else {
-          if (!completer.isCompleted) completer.complete(null);
+          if (!completer.isCompleted) {
+            completer.complete(null);
+          }
         }
       }, onError: (_) {
-        if (!completer.isCompleted) completer.complete(null);
+        if (!completer.isCompleted) {
+          completer.complete(null);
+        }
       }, onDone: () {
-        if (!completer.isCompleted) completer.complete(null);
+        if (!completer.isCompleted) {
+          completer.complete(null);
+        }
       });
 
       Timer(Duration(milliseconds: timeoutMs), () {
-        if (!completer.isCompleted) completer.complete(null);
+        if (!completer.isCompleted) {
+          completer.complete(null);
+        }
       });
 
-      final result = await completer.future;
-      return result;
+      return await completer.future;
     } catch (_) {
       return null;
     } finally {
@@ -615,9 +1141,6 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // =========================================================================
-  // تولید ۵۰ آی‌پی منظم و پخش‌شده از هر رنج CIDR دیتابیس کلودفلر
-  // =========================================================================
   Future<List<String>> _loadDeepScanIps() async {
     final List<String> candidateIps = [];
     try {
@@ -660,9 +1183,6 @@ class _HomePageState extends State<HomePage> {
     return candidateIps;
   }
 
-  // =========================================================================
-  // موتور اسکن هوشمند با فال‌بک خودکار به دیتابیس بزرگ
-  // =========================================================================
   Future<String> _findFastestIP(String host, String path) async {
     String bestIP = "";
     int bestLatency = 9999;
@@ -682,9 +1202,7 @@ class _HomePageState extends State<HomePage> {
 
     if (bestIP.isNotEmpty && bestLatency < 9999) {
       if (mounted) {
-        setState(() {
-          _bestPing = bestLatency;
-        });
+        setState(() => _bestPing = bestLatency);
       }
       return bestIP;
     }
@@ -720,17 +1238,61 @@ class _HomePageState extends State<HomePage> {
         _bestPing = bestLatency == 9999 ? 0 : bestLatency;
       });
     }
-    return bestIP.isNotEmpty ? bestIP : "104.18.0.14";
+    return bestIP.isNotEmpty ? bestIP : "104.20.5.5";
   }
 
   // =========================================================================
-  // روتینگ استاندارد و کاملاً پایدار Aether
+  // روتینگ ۱۰۰٪ پایدار با آزادی ترافیک سوکت و مجهز به Bypass Iran
   // =========================================================================
-  String _generateAetherBridgeV2RayConfig() {
+  String _generateBridgeV2RayConfig(int socksPort, String outboundTag) {
+    final List<Map<String, dynamic>> rules = [];
+
+    // ۱. افزودن روتینگ دامنه‌ای مستقیم برای ایران (بدون نیاز به فایل geosite.dat)
+    if (_bypassIran) {
+      rules.addAll([
+        {
+          "type": "field",
+          "domain": [
+            "domain:ir",
+            "domain:shaparak.ir",
+            "domain:divar.ir",
+            "domain:digikala.com",
+            "domain:aparat.com",
+            "domain:snapp.ir",
+            "domain:tci.ir",
+            "domain:mci.ir",
+            "domain:irancell.ir",
+            "domain:telewebion.com",
+            "domain:rubika.ir",
+            "domain:bale.ai",
+            "domain:eitaa.com",
+            "domain:splus.ir",
+            "domain:igap.net"
+          ],
+          "outboundTag": "direct"
+        },
+        {
+          "type": "field",
+          "ip": [
+            "10.0.0.0/8",
+            "172.16.0.0/12",
+            "192.168.0.0/16",
+            "100.64.0.0/10"
+          ],
+          "outboundTag": "direct"
+        }
+      ]);
+    }
+
+    // ۲. هدایت ۱۰۰٪ سایر ترافیک‌ها به ساکس تور یا اَتر
+    rules.add({
+      "type": "field",
+      "network": "tcp,udp",
+      "outboundTag": outboundTag
+    });
+
     final Map<String, dynamic> bridgeConfig = {
-      "log": {
-        "loglevel": "none"
-      },
+      "log": {"loglevel": "none"},
       "inbounds": [
         {
           "tag": "socks-in",
@@ -739,24 +1301,20 @@ class _HomePageState extends State<HomePage> {
           "protocol": "socks",
           "sniffing": {
             "enabled": true,
-            "destOverride": ["http", "tls"],
-            "routeOnly": false
+            "destOverride": ["http", "tls"]
           },
-          "settings": {
-            "auth": "noauth",
-            "udp": true
-          }
+          "settings": {"auth": "noauth", "udp": true}
         }
       ],
       "outbounds": [
         {
-          "tag": "proxy",
+          "tag": outboundTag,
           "protocol": "socks",
           "settings": {
             "servers": [
               {
                 "address": "127.0.0.1",
-                "port": 1819
+                "port": socksPort
               }
             ]
           }
@@ -765,7 +1323,7 @@ class _HomePageState extends State<HomePage> {
           "tag": "direct",
           "protocol": "freedom",
           "settings": {
-            "domainStrategy": "UseIP"
+            "domainStrategy": "AsIs"
           }
         },
         {
@@ -775,147 +1333,33 @@ class _HomePageState extends State<HomePage> {
       ],
       "routing": {
         "domainStrategy": "IPIfNonMatch",
-        "rules": [
-          {
-            "type": "field",
-            "network": "udp",
-            "port": "443,853",
-            "outboundTag": "block"
-          },
-          {
-            "type": "field",
-            "ip": [
-              "127.0.0.1/32",
-              "162.159.192.0/18",
-              "162.159.0.0/16",
-              "188.114.96.0/20"
-            ],
-            "outboundTag": "direct"
-          },
-          {
-            "type": "field",
-            "network": "udp",
-            "port": "500,854,859,864,878,880,890,891,894,903,908,928,934,939,942,943,945,946,955,968,987,988,1002,1010,1014,1018,1070,1074,1180,1387,1843,2371,2408,2506,3138,3476,3581,3854,4177,4198,4233,4500,5279,5956,7103,7152,7156,7281,7559,8319,8742,8854,8886",
-            "outboundTag": "direct"
-          },
-          {
-            "type": "field",
-            "network": "tcp,udp",
-            "outboundTag": "proxy"
-          }
-        ]
+        "rules": rules
       }
     };
     return jsonEncode(bridgeConfig);
   }
 
   // =========================================================================
-  // روتینگ اختصاصی و کاملاً هماهنگ هسته تور (Tor Engine)
+  // اتصال هسته تور (Tor Engine)
   // =========================================================================
-  String _generateTorBridgeV2RayConfig() {
-    final Map<String, dynamic> bridgeConfig = {
-      "log": {
-        "loglevel": "none"
-      },
-      "inbounds": [
-        {
-          "tag": "socks-in",
-          "port": 10808,
-          "listen": "127.0.0.1",
-          "protocol": "socks",
-          "sniffing": {
-            "enabled": true,
-            "destOverride": ["http", "tls"],
-            "routeOnly": false
-          },
-          "settings": {
-            "auth": "noauth",
-            "udp": true
-          }
-        }
-      ],
-      "outbounds": [
-        {
-          "tag": "tor-proxy",
-          "protocol": "socks",
-          "settings": {
-            "servers": [
-              {
-                "address": "127.0.0.1",
-                "port": 9050
-              }
-            ]
-          }
-        },
-        {
-          "tag": "direct",
-          "protocol": "freedom",
-          "settings": {
-            "domainStrategy": "UseIP"
-          }
-        },
-        {
-          "tag": "block",
-          "protocol": "blackhole"
-        }
-      ],
-      "routing": {
-        "domainStrategy": "IPIfNonMatch",
-        "rules": [
-          {
-            "type": "field",
-            "network": "udp",
-            "port": "443,853",
-            "outboundTag": "block"
-          },
-          {
-            "type": "field",
-            "ip": [
-              "127.0.0.1/32",
-              "162.159.192.0/18",
-              "162.159.0.0/16",
-              "188.114.96.0/20"
-            ],
-            "outboundTag": "direct"
-          },
-          {
-            "type": "field",
-            "network": "udp",
-            "port": "500,854,859,864,878,880,890,891,894,903,908,928,934,939,942,943,945,946,955,968,987,988,1002,1010,1014,1018,1070,1074,1180,1387,1843,2371,2408,2506,3138,3476,3581,3854,4177,4198,4233,4500,5279,5956,7103,7152,7156,7281,7559,8319,8742,8854,8886",
-            "outboundTag": "direct"
-          },
-          {
-            "type": "field",
-            "network": "tcp,udp",
-            "outboundTag": "tor-proxy"
-          }
-        ]
-      }
-    };
-    return jsonEncode(bridgeConfig);
-  }
-
   Future<void> _connectTor() async {
-    if (_isTorConnecting) return;
-
-    await _disconnectTor();
-    await _disconnectAether();
-    await flutterV2ray.stopV2Ray();
-    await Future.delayed(const Duration(milliseconds: 300));
+    if (_isTransitioning) return;
 
     setState(() {
-      _isTorConnecting = true;
+      _isTransitioning = true;
       _torBootstrapProgress = 0;
       _torCurrentStep = 0;
       _torStepStatus = _t("tor_step_cleanup");
+      _publicIp = null;
+      _ipCountry = null;
+      _ipFlagEmoji = null;
+      _realPingMs = null;
     });
 
+    await _resetAllEngines();
+
     try {
-      await _torChannel.invokeMethod('killAllCores');
-      await Future.delayed(const Duration(milliseconds: 300));
-
       int? upstreamPort;
-
       if (_selectedTorMode == "aether_masque" || _selectedTorMode == "aether_quic") {
         upstreamPort = 1819;
         final String aetherMode = _selectedTorMode == "aether_masque" ? "masque_h2" : "masque";
@@ -938,11 +1382,11 @@ class _HomePageState extends State<HomePage> {
         }
 
         bool aetherReady = false;
-        for (int i = 0; i < 40; i++) {
-          await Future.delayed(const Duration(milliseconds: 300));
+        for (int i = 0; i < 70; i++) {
+          await Future.delayed(const Duration(milliseconds: 500));
           aetherReady = await _aetherChannel.invokeMethod('checkSocksReady', {
             'port': 1819,
-            'timeoutMs': 600,
+            'timeoutMs': 700,
           }) ?? false;
           if (aetherReady) break;
         }
@@ -959,7 +1403,7 @@ class _HomePageState extends State<HomePage> {
 
         bool aetherCanPassTraffic = false;
         for (int i = 0; i < 15; i++) {
-          await Future.delayed(const Duration(milliseconds: 400));
+          await Future.delayed(const Duration(milliseconds: 500));
           aetherCanPassTraffic = await _aetherChannel.invokeMethod('testAetherEgress', {
             'port': 1819,
             'timeoutMs': 3500,
@@ -999,23 +1443,23 @@ class _HomePageState extends State<HomePage> {
       _torProgressTimer?.cancel();
       bool torReached100 = false;
 
-      _torProgressTimer = Timer.periodic(const Duration(milliseconds: 250), (timer) async {
+      _torProgressTimer = Timer.periodic(const Duration(milliseconds: 300), (timer) async {
         try {
           final dynamic status = await _torChannel.invokeMethod('getTorStatus');
           if (status is Map) {
             final int percent = status['percent'] ?? 0;
             if (mounted) {
-              setState(() {
-                if (percent > _torBootstrapProgress) {
+              if (percent > _torBootstrapProgress) {
+                setState(() {
                   _torBootstrapProgress = percent;
-                }
-                if (percent > 0) {
-                  _torStepStatus = "${_t("tor_building_circuits")} $percent%";
-                }
-              });
-            }
-            if (percent >= 100) {
-              torReached100 = true;
+                  if (percent > 0) {
+                    _torStepStatus = "${_t("tor_building_circuits")} $percent%";
+                  }
+                });
+              }
+              if (percent >= 100) {
+                torReached100 = true;
+              }
             }
           }
         } catch (_) {}
@@ -1030,16 +1474,14 @@ class _HomePageState extends State<HomePage> {
 
         if (socksReady && (torReached100 || _torBootstrapProgress >= 100)) {
           if (mounted) {
-            setState(() {
-              _torBootstrapProgress = 100;
-            });
+            setState(() => _torBootstrapProgress = 100);
           }
           break;
         }
       }
 
       _torProgressTimer?.cancel();
-      await Future.delayed(const Duration(milliseconds: 500));
+      await Future.delayed(const Duration(milliseconds: 400));
 
       if (mounted) {
         setState(() {
@@ -1049,74 +1491,63 @@ class _HomePageState extends State<HomePage> {
       }
 
       if (await flutterV2ray.requestPermission()) {
-        final String torConfig = _generateTorBridgeV2RayConfig();
+        final String torConfig = _generateBridgeV2RayConfig(9050, "tor-proxy");
         
         flutterV2ray.startV2Ray(
           remark: "Tor (${_selectedTorMode.toUpperCase()})",
           config: torConfig,
+          blockedApps: [appPackageName],
           proxyOnly: false,
           notificationDisconnectButtonName: "DISCONNECT",
         );
 
+        await _saveEngineState(ActiveEngine.tor);
+
         if (mounted) {
           setState(() {
-            _isTorActive = true;
-            _isTorConnecting = false;
+            _activeEngine = ActiveEngine.tor;
+            _isTransitioning = false;
             _torStepStatus = _t("tor_connected_banner");
           });
         }
         _showSnackBar(_t("tor_connected_banner"));
       } else {
-        await _disconnectTor();
+        await _resetAllEngines();
+        if (mounted) {
+          setState(() => _activeEngine = ActiveEngine.none);
+        }
         _showSnackBar(_t("os_perm_err"));
       }
     } catch (e) {
-      print("Tor Connection Error: $e");
-      await _disconnectTor();
+      await _resetAllEngines();
+      if (mounted) {
+        setState(() => _activeEngine = ActiveEngine.none);
+      }
       _showSnackBar(e.toString().replaceAll("Exception: ", ""));
     } finally {
       _torProgressTimer?.cancel();
       if (mounted) {
-        setState(() {
-          _isTorConnecting = false;
-        });
+        setState(() => _isTransitioning = false);
       }
     }
   }
 
-  Future<void> _disconnectTor() async {
-    _torProgressTimer?.cancel();
-    setState(() {
-      _isTorConnecting = false;
-      _isTorActive = false;
-      _torBootstrapProgress = 0;
-      _torCurrentStep = 0;
-      _torStepStatus = _t("disconnected");
-    });
-
-    await flutterV2ray.stopV2Ray();
-    try {
-      await _torChannel.invokeMethod('stopTor');
-    } catch (_) {}
-    try {
-      await _aetherChannel.invokeMethod('stopAether');
-    } catch (_) {}
-  }
-
+  // =========================================================================
+  // اتصال هسته اَتر (Aether Engine) با استثنا کردن سوکت‌های محلی
+  // =========================================================================
   Future<void> _connectAether() async {
-    if (_isAetherConnecting) return;
-
-    if (v2rayStatus.value.state == "CONNECTED" || _isAetherActive || _isTorActive) {
-      await _disconnectTor();
-      await _disconnectAether();
-      await Future.delayed(const Duration(milliseconds: 600));
-    }
+    if (_isTransitioning) return;
 
     setState(() {
-      _isAetherConnecting = true;
+      _isTransitioning = true;
+      _publicIp = null;
+      _ipCountry = null;
+      _ipFlagEmoji = null;
+      _realPingMs = null;
     });
 
     _showSnackBar(_t("aether_launching"));
+    await _resetAllEngines();
 
     try {
       final bool started = await _aetherChannel.invokeMethod('startAether', {
@@ -1130,7 +1561,7 @@ class _HomePageState extends State<HomePage> {
       }
 
       bool socksReady = false;
-      for (int i = 0; i < 80; i++) {
+      for (int i = 0; i < 70; i++) {
         await Future.delayed(const Duration(milliseconds: 500));
         socksReady = await _aetherChannel.invokeMethod('checkSocksReady', {
           'port': 1819,
@@ -1145,88 +1576,479 @@ class _HomePageState extends State<HomePage> {
       }
 
       if (await flutterV2ray.requestPermission()) {
-        final String aetherConfig = _generateAetherBridgeV2RayConfig();
+        final String aetherConfig = _generateBridgeV2RayConfig(1819, "aether-proxy");
         
         flutterV2ray.startV2Ray(
           remark: "Aether (${_selectedAetherMode.toUpperCase()})",
           config: aetherConfig,
+          blockedApps: [appPackageName],
           proxyOnly: false,
           notificationDisconnectButtonName: "DISCONNECT",
         );
 
+        await _saveEngineState(ActiveEngine.aether);
+
         if (mounted) {
           setState(() {
-            _isAetherActive = true;
-            _isAetherConnecting = false;
+            _activeEngine = ActiveEngine.aether;
+            _isTransitioning = false;
           });
         }
         _showSnackBar(_t("aether_connected_banner"));
       } else {
-        await _disconnectAether();
+        await _resetAllEngines();
+        if (mounted) {
+          setState(() => _activeEngine = ActiveEngine.none);
+        }
         _showSnackBar(_t("os_perm_err"));
       }
     } catch (e) {
-      print("Aether Connection Error: $e");
-      await _disconnectAether();
+      await _resetAllEngines();
+      if (mounted) {
+        setState(() => _activeEngine = ActiveEngine.none);
+      }
       _showSnackBar(_t("aether_start_err"));
     } finally {
       if (mounted) {
-        setState(() {
-          _isAetherConnecting = false;
-        });
+        setState(() => _isTransitioning = false);
       }
     }
   }
 
-  Future<void> _disconnectAether() async {
+  // =========================================================================
+  // اتصال هسته داشبورد (V2Ray Cloudflare)
+  // =========================================================================
+  void _connectDashboard() async {
+    if (_isTransitioning) return;
+
     setState(() {
-      _isAetherConnecting = false;
-      _isAetherActive = false;
+      _isTransitioning = true;
+      _isScanningIPs = true;
+      _publicIp = null;
+      _ipCountry = null;
+      _ipFlagEmoji = null;
+      _realPingMs = null;
     });
 
-    await flutterV2ray.stopV2Ray();
+    await _resetAllEngines();
+
+    if (_fetchedAccounts.isEmpty && !_serversUpdatingMode) {
+      await _fetchAndLoadAccounts();
+    }
+    
+    if (_serversUpdatingMode || _fetchedAccounts.isEmpty) {
+      setState(() {
+        _isTransitioning = false;
+        _isScanningIPs = false;
+      });
+      _showSnackBar(_t("acc_sync_err"));
+      return;
+    }
+
+    _showSnackBar(_t("connecting_msg"));
+
+    final dnsProbe = await _verifyDnsIp("1.1.1.1", timeoutMs: 1200);
+    if (dnsProbe == null) {
+      _showBannerNotification(
+        _t("banner_dns_rescue"),
+        color: const Color(0xFF8B5CF6),
+        icon: Icons.security_rounded,
+      );
+      final rescuedDns = await _runDnsRescueScan();
+      if (rescuedDns.isNotEmpty) {
+        _activeVerifiedDnsList = rescuedDns;
+      }
+    }
+
+    String activeWorker = "round-sea-8418.redcloudir.workers.dev";
+    String activePath = "/";
+    if (_selectedAccountIndex >= 0 && _selectedAccountIndex < _fetchedAccounts.length) {
+      activeWorker = _fetchedAccounts[_selectedAccountIndex]['worker'] ?? activeWorker;
+      activePath = _fetchedAccounts[_selectedAccountIndex]['path'] ?? activePath;
+    }
+
+    final String fastest = await _findFastestIP(activeWorker, activePath);
+    
+    if (mounted) {
+      setState(() {
+        _fastestIP = fastest;
+        _isScanningIPs = false;
+      });
+    }
+
+    if (_selectedAccountIndex >= 0 && _selectedAccountIndex < _fetchedAccounts.length) {
+      final account = _fetchedAccounts[_selectedAccountIndex];
+      final String worker = account['worker'] ?? '';
+      final String uuid = account['uuid'] ?? '';
+      final String path = account['path'] ?? '';
+      
+      final String finalLink = "vless://$uuid@$fastest:443?encryption=none&security=tls&sni=$worker&fp=chrome&alpn=http%2F1.1&type=ws&host=$worker&path=${Uri.encodeComponent(path)}#RedCloud_Fastest";
+      _parseAndSaveConfig(finalLink, updateUI: false);
+    }
+
+    if (await flutterV2ray.requestPermission()) {
+      _showSnackBar("Connecting to: $fastest");
+      _lastSentDownload = 0;
+      _lastSentUpload = 0;
+
+      flutterV2ray.startV2Ray(
+        remark: _remark,
+        config: _fullConfigJson,
+        blockedApps: [appPackageName],
+        proxyOnly: false,
+        notificationDisconnectButtonName: "DISCONNECT",
+      );
+
+      await _saveEngineState(ActiveEngine.dashboard);
+
+      if (mounted) {
+        setState(() {
+          _activeEngine = ActiveEngine.dashboard;
+          _isTransitioning = false;
+        });
+      }
+    } else {
+      await _resetAllEngines();
+      setState(() {
+        _activeEngine = ActiveEngine.none;
+        _isTransitioning = false;
+      });
+      _showSnackBar(_t("os_perm_err"));
+    }
+  }
+
+  void _disconnectCurrent() async {
+    setState(() {
+      _isTransitioning = true;
+    });
+
+    final int currentDownload = v2rayStatus.value.download;
+    final int currentUpload = v2rayStatus.value.upload;
+
+    await _resetAllEngines();
+
+    if (_activeEngine == ActiveEngine.dashboard) {
+      await _reportDeltaUsage(forceDownload: currentDownload, forceUpload: currentUpload);
+    }
+
+    if (mounted) {
+      setState(() {
+        _activeEngine = ActiveEngine.none;
+        _isTransitioning = false;
+        _torBootstrapProgress = 0;
+        _torStepStatus = _t("disconnected");
+        _publicIp = null;
+        _ipCountry = null;
+        _ipFlagEmoji = null;
+        _realPingMs = null;
+        _isTestingIp = false;
+      });
+    }
+  }
+
+  String _formatBytes(int bytes, {bool isSpeed = false}) {
+    if (bytes <= 0) return isSpeed ? "0 B/s" : "0 B";
+    const List<String> suffixes = ["B", "KB", "MB", "GB", "TB"];
+    int i = 0;
+    double num = bytes.toDouble();
+    while (num >= 1024 && i < suffixes.length - 1) {
+      num /= 1024;
+      i++;
+    }
+    return "${num.toStringAsFixed(1)} ${suffixes[i]}${isSpeed ? '/s' : ''}";
+  }
+
+  void _parseAndSaveConfig(String link, {bool updateUI = true}) {
+    if (link.isEmpty) return;
+    String configText = link;
+    if (!configText.startsWith("{")) {
+      try {
+        final V2RayURL v2rayURL = V2ray.parseFromURL(configText);
+        v2rayURL.inbound['port'] = 10808;
+        v2rayURL.dns = {"servers": _activeVerifiedDnsList};
+        configText = v2rayURL.getFullConfiguration();
+        _remark = v2rayURL.remark;
+        if (updateUI && mounted) {
+          String protocol = "نامشخص";
+          final String typeStr = v2rayURL.runtimeType.toString().toLowerCase();
+          if (typeStr.contains("vless")) {
+            protocol = "VLESS";
+          } else if (typeStr.contains("vmess")) {
+            protocol = "VMESS";
+          } else if (typeStr.contains("trojan")) {
+            protocol = "TROJAN";
+          } else if (typeStr.contains("shadowsocks") || typeStr.contains("ss")) {
+            protocol = "SHADOWSOCKS";
+          } else if (typeStr.contains("socks")) {
+            protocol = "SOCKS";
+          }
+
+          setState(() {
+            _serverName = v2rayURL.remark;
+            _protocolType = protocol;
+          });
+        }
+      } catch (e) {
+        _showSnackBar(_t("config_err"));
+        return;
+      }
+    }
+
     try {
-      await _aetherChannel.invokeMethod('stopAether');
+      final Map<String, dynamic> configMap = jsonDecode(configText);
+      
+      // تضمین وجود پورت استاندارد SOCKS5 لوکال روی 127.0.0.1:10808 با UDP جهت استعلام دقیق آی‌پی
+      configMap['inbounds'] = [
+        {
+          "tag": "socks-in",
+          "port": 10808,
+          "listen": "127.0.0.1",
+          "protocol": "socks",
+          "sniffing": {
+            "enabled": true,
+            "destOverride": ["http", "tls", "quic"]
+          },
+          "settings": {
+            "auth": "noauth",
+            "udp": true
+          }
+        }
+      ];
+
+      configMap['dns'] = {
+        "servers": [..._activeVerifiedDnsList, "localhost"],
+        "queryStrategy": "UseIP"
+      };
+
+      final List<Map<String, dynamic>> routingRules = [
+        {"type": "field", "port": 53, "outboundTag": "dns"}
+      ];
+
+      if (_bypassIran) {
+        routingRules.add({
+          "type": "field",
+          "domain": [
+            "domain:ir",
+            "domain:shaparak.ir",
+            "domain:divar.ir",
+            "domain:digikala.com",
+            "domain:aparat.com",
+            "domain:snapp.ir",
+            "domain:tci.ir",
+            "domain:mci.ir",
+            "domain:irancell.ir",
+            "domain:telewebion.com",
+            "domain:rubika.ir",
+            "domain:bale.ai",
+            "domain:eitaa.com",
+            "domain:splus.ir",
+            "domain:igap.net"
+          ],
+          "outboundTag": "direct"
+        });
+        routingRules.add({
+          "type": "field",
+          "ip": [
+            "10.0.0.0/8",
+            "172.16.0.0/12",
+            "192.168.0.0/16",
+            "100.64.0.0/10"
+          ],
+          "outboundTag": "direct"
+        });
+      }
+
+      configMap['routing'] = {
+        "domainStrategy": "IPIfNonMatch",
+        "rules": routingRules
+      };
+
+      if (configMap.containsKey('outbounds') && configMap['outbounds'] is List) {
+        final List<dynamic> outbounds = configMap['outbounds'];
+        for (var outbound in outbounds) {
+          if (outbound is Map<String, dynamic> && outbound.containsKey('streamSettings')) {
+            final dynamic streamSettings = outbound['streamSettings'];
+            if (streamSettings is Map<String, dynamic> && streamSettings.containsKey('tlsSettings')) {
+              final dynamic tlsSettings = streamSettings['tlsSettings'];
+              if (tlsSettings is Map<String, dynamic>) {
+                tlsSettings.remove('allowInsecure');
+              }
+            }
+          }
+        }
+      }
+
+      _fullConfigJson = jsonEncode(configMap);
     } catch (_) {}
   }
 
-  Future<void> _loadExhaustedWorkers() async {
-    try {
-      final SharedPreferences prefs = await SharedPreferences.getInstance();
-      final String? jsonStr = prefs.getString('exhausted_workers_data');
-      
-      if (jsonStr != null) {
-        final Map<String, dynamic> data = jsonDecode(jsonStr);
-        final String savedDate = data['date'] ?? '';
-        final String todayDate = DateTime.now().toIso8601String().substring(0, 10);
-
-        if (savedDate == todayDate) {
-          final List<dynamic>? workers = data['workers'];
-          if (workers != null) {
-            _locallyExhaustedWorkers.addAll(workers.cast<String>());
-          }
-        } else {
-          await prefs.remove('exhausted_workers_data');
-        }
-      }
-    } catch (e) {
-      print("Error loading exhausted workers: $e");
+  void _pasteFromClipboard() async {
+    final ClipboardData? clipboardData = await Clipboard.getData('text/plain');
+    if (clipboardData != null && clipboardData.text != null) {
+      _parseAndSaveConfig(clipboardData.text!.trim());
+    } else {
+      _showSnackBar(_t("clipboard_empty"));
     }
   }
 
-  Future<void> _saveExhaustedWorkers() async {
+  void _openConfigBottomSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF1E293B),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+            top: 20,
+            left: 20,
+            right: 20,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  width: 50,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: Colors.grey,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              Text(
+                _t("manual_input_title"),
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 15),
+              TextField(
+                controller: _configController,
+                maxLines: 4,
+                decoration: const InputDecoration(
+                  labelText: 'Vless, Vmess, Trojan Link',
+                  hintText: 'Paste connection link here',
+                ),
+              ),
+              const SizedBox(height: 15),
+              ElevatedButton.icon(
+                onPressed: () {
+                  _pasteFromClipboard();
+                  Navigator.pop(context);
+                },
+                icon: const Icon(Icons.paste),
+                label: Text(_t("paste_btn")),
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+              ),
+              const SizedBox(height: 10),
+              ElevatedButton(
+                onPressed: () {
+                  _parseAndSaveConfig(_configController.text.trim());
+                  Navigator.pop(context);
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Theme.of(context).colorScheme.primary,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+                child: Text(_t("save_btn")),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _fetchAndLoadAccounts({bool showMessage = false}) async {
+    if (!mounted) return;
+    setState(() {
+      _isLoadingAccounts = true;
+      _serversUpdatingMode = false;
+    });
+
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
     try {
-      final SharedPreferences prefs = await SharedPreferences.getInstance();
-      final String todayDate = DateTime.now().toIso8601String().substring(0, 10);
+      final cacheBuster = DateTime.now().millisecondsSinceEpoch;
+      final request = await client.getUrl(Uri.parse('$githubRawUrl?cb=$cacheBuster'));
+      final response = await request.close();
       
-      final Map<String, dynamic> data = {
-        'date': todayDate,
-        'workers': _locallyExhaustedWorkers.toList(),
-      };
-      
-      await prefs.setString('exhausted_workers_data', jsonEncode(data));
-    } catch (e) {
-      print("Error saving exhausted workers: $e");
+      if (response.statusCode == 200) {
+        final body = await response.transform(utf8.decoder).join();
+        final List<dynamic> jsonList = jsonDecode(body);
+        final List<Map<String, String>> parsed = [];
+        
+        for (var item in jsonList) {
+          if (item is Map<String, dynamic>) {
+            final String workerName = item['worker']?.toString() ?? '';
+            final String status = item['status']?.toString() ?? 'full';
+
+            if (status != 'exhausted' && !_locallyExhaustedWorkers.contains(workerName)) {
+              parsed.add({
+                'worker': workerName,
+                'uuid': item['uuid']?.toString() ?? '',
+                'path': item['path']?.toString() ?? '',
+                'status': status,
+                'used_bytes': item['used_bytes']?.toString() ?? '0',
+                'priority': item['priority']?.toString() ?? '1',
+              });
+            }
+          }
+        }
+
+        parsed.sort((a, b) {
+          final int pA = int.tryParse(a['priority'] ?? '1') ?? 1;
+          final int pB = int.tryParse(b['priority'] ?? '1') ?? 1;
+          return pA.compareTo(pB);
+        });
+
+        if (mounted) {
+          setState(() {
+            _fetchedAccounts = parsed;
+            if (_fetchedAccounts.isNotEmpty) {
+              _selectedAccountIndex = 0;
+              _updateSelectedConfig();
+            } else {
+              _serversUpdatingMode = true;
+              _selectedAccountIndex = -1;
+            }
+          });
+        }
+        if (showMessage) _showSnackBar(_t("acc_sync_ok"));
+      } else {
+        if (showMessage) _showSnackBar(_t("acc_sync_err"));
+      }
+    } catch (_) {
+      if (showMessage) _showSnackBar(_t("acc_sync_err"));
+    } finally {
+      client.close();
+      if (mounted) setState(() => _isLoadingAccounts = false);
+    }
+  }
+
+  void _updateSelectedConfig() {
+    if (_selectedAccountIndex < 0 || _selectedAccountIndex >= _fetchedAccounts.length) return;
+    final account = _fetchedAccounts[_selectedAccountIndex];
+    final String worker = account['worker'] ?? '';
+    final String uuid = account['uuid'] ?? '';
+    final String path = account['path'] ?? '';
+    
+    final String vlessLink = "vless://$uuid@$_fastestIP:443?encryption=none&security=tls&sni=$worker&fp=chrome&alpn=http%2F1.1&type=ws&host=$worker&path=${Uri.encodeComponent(path)}#$_serverName";
+    _parseAndSaveConfig(vlessLink, updateUI: false);
+    
+    if (mounted) {
+      setState(() {
+        _serverName = "${_t("tab_dashboard")} ${_selectedAccountIndex + 1}";
+        _protocolType = "VLESS";
+      });
     }
   }
 
@@ -1242,37 +2064,22 @@ class _HomePageState extends State<HomePage> {
 
     if (totalDeltaBytes <= 0) return;
 
-    if (deltaDownload < 0 || deltaUpload < 0) {
-      _lastSentDownload = currentDownload;
-      _lastSentUpload = currentUpload;
-      return;
-    }
-
     final activeAccount = _fetchedAccounts[_selectedAccountIndex];
     final String activeWorker = activeAccount['worker'] ?? '';
-
     if (activeWorker.isEmpty) return;
 
-    final Map<String, dynamic> reportPayload = {
-      "worker": activeWorker,
-      "bytes_used": totalDeltaBytes
-    };
-
-    final client = HttpClient();
-    client.connectionTimeout = const Duration(seconds: 5);
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
     try {
       final request = await client.postUrl(Uri.parse('$workerApiUrl/api/report'));
       request.headers.set('content-type', 'application/json');
-      request.add(utf8.encode(jsonEncode(reportPayload)));
-      
+      request.add(utf8.encode(jsonEncode({"worker": activeWorker, "bytes_used": totalDeltaBytes})));
       final response = await request.close();
       if (response.statusCode == 200) {
         _lastSentDownload = currentDownload;
         _lastSentUpload = currentUpload;
       }
-    } catch (e) {
-      print("Telemetry error: $e");
-    } finally {
+    } catch (_) {}
+    finally {
       client.close();
     }
   }
@@ -1285,21 +2092,49 @@ class _HomePageState extends State<HomePage> {
     if (currentRealtimeDailyUsage >= _maxDailyBytes) {
       _locallyExhaustedWorkers.add(activeWorker);
       await _saveExhaustedWorkers();
-      
       _showSnackBar(_t("limit_exhausted_banner"));
-      _disconnect();
-      
+      _disconnectCurrent();
       await _fetchAndLoadAccounts();
-
       if (_fetchedAccounts.isNotEmpty && !_serversUpdatingMode) {
         if (!mounted) return;
         setState(() {
           _selectedAccountIndex = 0;
           _updateSelectedConfig();
         });
-        _connect();
+        _connectDashboard();
       }
     }
+  }
+
+  Future<void> _loadExhaustedWorkers() async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      final String? jsonStr = prefs.getString('exhausted_workers_data');
+      if (jsonStr != null) {
+        final Map<String, dynamic> data = jsonDecode(jsonStr);
+        final String savedDate = data['date'] ?? '';
+        final String todayDate = DateTime.now().toIso8601String().substring(0, 10);
+        if (savedDate == todayDate) {
+          final List<dynamic>? workers = data['workers'];
+          if (workers != null) {
+            _locallyExhaustedWorkers.addAll(workers.cast<String>());
+          }
+        } else {
+          await prefs.remove('exhausted_workers_data');
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _saveExhaustedWorkers() async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      final String todayDate = DateTime.now().toIso8601String().substring(0, 10);
+      await prefs.setString('exhausted_workers_data', jsonEncode({
+        'date': todayDate,
+        'workers': _locallyExhaustedWorkers.toList(),
+      }));
+    } catch (_) {}
   }
 
   Future<void> _launchURL(String urlString) async {
@@ -1438,390 +2273,110 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Future<void> _fetchAndLoadAccounts({bool showMessage = false}) async {
-    if (!mounted) return;
-    setState(() {
-      _isLoadingAccounts = true;
-      _serversUpdatingMode = false;
-    });
-
-    final client = HttpClient();
-    client.connectionTimeout = const Duration(seconds: 10);
-    try {
-      final cacheBuster = DateTime.now().millisecondsSinceEpoch;
-      final request = await client.getUrl(Uri.parse('$githubRawUrl?cb=$cacheBuster'));
-      final response = await request.close();
-      
-      if (response.statusCode == 200) {
-        final body = await response.transform(utf8.decoder).join();
-        final List<dynamic> jsonList = jsonDecode(body);
-        
-        final List<Map<String, String>> parsed = [];
-        for (var item in jsonList) {
-          if (item is Map<String, dynamic>) {
-            final String workerName = item['worker']?.toString() ?? '';
-            final String status = item['status']?.toString() ?? 'full';
-
-            if (status != 'exhausted' && !_locallyExhaustedWorkers.contains(workerName)) {
-              parsed.add({
-                'worker': workerName,
-                'uuid': item['uuid']?.toString() ?? '',
-                'path': item['path']?.toString() ?? '',
-                'status': status,
-                'used_bytes': item['used_bytes']?.toString() ?? '0',
-                'priority': item['priority']?.toString() ?? '1',
-              });
-            }
-          }
-        }
-
-        parsed.sort((a, b) {
-          final int pA = int.tryParse(a['priority'] ?? '1') ?? 1;
-          final int pB = int.tryParse(b['priority'] ?? '1') ?? 1;
-          return pA.compareTo(pB);
-        });
-
-        if (!mounted) return;
-        setState(() {
-          _fetchedAccounts = parsed;
-          if (_fetchedAccounts.isNotEmpty) {
-            _selectedAccountIndex = 0;
-            _updateSelectedConfig();
-          } else {
-            _serversUpdatingMode = true;
-            _selectedAccountIndex = -1;
-          }
-        });
-        if (showMessage) _showSnackBar(_t("acc_sync_ok"));
-      } else {
-        if (showMessage) _showSnackBar(_t("acc_sync_err"));
-      }
-    } catch (e) {
-      if (showMessage) _showSnackBar(_t("acc_sync_err"));
-    } finally {
-      client.close();
-      if (mounted) {
-        setState(() {
-          _isLoadingAccounts = false;
-        });
-      }
-    }
-  }
-
-  void _updateSelectedConfig() {
-    if (_selectedAccountIndex < 0 || _selectedAccountIndex >= _fetchedAccounts.length) return;
-    final account = _fetchedAccounts[_selectedAccountIndex];
-    final String worker = account['worker'] ?? '';
-    final String uuid = account['uuid'] ?? '';
-    final String path = account['path'] ?? '';
-    
-    final String vlessLink = "vless://$uuid@$_fastestIP:443?encryption=none&security=tls&sni=$worker&fp=chrome&alpn=http%2F1.1&type=ws&host=$worker&path=${Uri.encodeComponent(path)}#$_serverName";
-    _parseAndSaveConfig(vlessLink, updateUI: false);
-    
-    if (!mounted) return;
-    setState(() {
-      _serverName = "${_t("tab_dashboard")} ${_selectedAccountIndex + 1}";
-      _protocolType = "VLESS";
-    });
-  }
-
-  void _connect() async {
-    if (_isAetherActive) {
-      await _disconnectAether();
-    }
-    if (_isTorActive) {
-      await _disconnectTor();
-    }
-
-    await flutterV2ray.stopV2Ray();
-    await Future.delayed(const Duration(milliseconds: 300));
-
-    if (_fetchedAccounts.isEmpty && !_serversUpdatingMode) {
-      await _fetchAndLoadAccounts();
-    }
-    
-    if (_serversUpdatingMode) {
-      _showSnackBar(_t("server_updating_banner"));
-      return;
-    }
-
-    if (_fetchedAccounts.isEmpty && _fullConfigJson.isEmpty) {
-      _showSnackBar(_t("acc_sync_err"));
-      return;
-    }
-
-    if (!mounted) return;
-    setState(() {
-      _isScanningIPs = true;
-      _isAetherActive = false;
-      _isTorActive = false;
-    });
-    
-    _showSnackBar(_t("connecting_msg"));
-
-    // ۱. بررسی سلامت DNS و نجات خودکار از مسمومیت شبکه
-    final dnsProbe = await _verifyDnsIp("1.1.1.1", timeoutMs: 1200);
-    if (dnsProbe == null) {
-      _showBannerNotification(
-        _t("banner_dns_rescue"),
-        color: const Color(0xFF8B5CF6),
-        icon: Icons.security_rounded,
-      );
-      final rescuedDns = await _runDnsRescueScan();
-      if (rescuedDns.isNotEmpty) {
-        _activeVerifiedDnsList = rescuedDns;
-      }
-    }
-
-    String activeWorker = "round-sea-8418.redcloudir.workers.dev";
-    String activePath = "/";
-    if (_selectedAccountIndex >= 0 && _selectedAccountIndex < _fetchedAccounts.length) {
-      activeWorker = _fetchedAccounts[_selectedAccountIndex]['worker'] ?? activeWorker;
-      activePath = _fetchedAccounts[_selectedAccountIndex]['path'] ?? activePath;
-    }
-
-    // ۲. اسکن واقعی لایه ۷ کلودفلر با فال‌بک دیتابیس بزرگ
-    final String fastest = await _findFastestIP(activeWorker, activePath);
-    
-    if (!mounted) return;
-    setState(() {
-      _fastestIP = fastest;
-      _isScanningIPs = false;
-    });
-
-    if (_selectedAccountIndex >= 0 && _selectedAccountIndex < _fetchedAccounts.length) {
-      final account = _fetchedAccounts[_selectedAccountIndex];
-      final String worker = account['worker'] ?? '';
-      final String uuid = account['uuid'] ?? '';
-      final String path = account['path'] ?? '';
-      
-      final String finalLink = "vless://$uuid@$fastest:443?encryption=none&security=tls&sni=$worker&fp=chrome&alpn=http%2F1.1&type=ws&host=$worker&path=${Uri.encodeComponent(path)}#RedCloud_Fastest";
-      _parseAndSaveConfig(finalLink, updateUI: false);
-    }
-
-    if (await flutterV2ray.requestPermission()) {
-      _showSnackBar("Connecting to: $fastest");
-
-      _lastSentDownload = 0;
-      _lastSentUpload = 0;
-
-      flutterV2ray.startV2Ray(
-        remark: _remark,
-        config: _fullConfigJson,
-        proxyOnly: false,
-        notificationDisconnectButtonName: "DISCONNECT",
-      );
-    } else {
-      _showSnackBar(_t("os_perm_err"));
-    }
-  }
-
-  void _disconnect() async {
-    final int currentDownload = v2rayStatus.value.download;
-    final int currentUpload = v2rayStatus.value.upload;
-
-    await flutterV2ray.stopV2Ray();
-    await _reportDeltaUsage(forceDownload: currentDownload, forceUpload: currentUpload);
-  }
-
-  String _formatBytes(int bytes, {bool isSpeed = false}) {
-    if (bytes <= 0) return isSpeed ? "0 B/s" : "0 B";
-    const List<String> suffixes = ["B", "KB", "MB", "GB", "TB"];
-    int i = 0;
-    double num = bytes.toDouble();
-    while (num >= 1024 && i < suffixes.length - 1) {
-      num /= 1024;
-      i++;
-    }
-    return "${num.toStringAsFixed(1)} ${suffixes[i]}${isSpeed ? '/s' : ''}";
-  }
-
   // =========================================================================
-  // ساختار اصلی و کاملاً سالم کانفیگ V2Ray (دقیقاً بر اساس نسخه پایدار پیام ۱۱)
+  // ویجت هوشمند نمایش وضعیت، آی‌پی، نام کشور، پرچم و پینگ واقعی
   // =========================================================================
-  void _parseAndSaveConfig(String link, {bool updateUI = true}) {
-    if (link.isEmpty) return;
-    
-    String configText = link;
-    if (!configText.startsWith("{")) {
-      try {
-        final V2RayURL v2rayURL = V2ray.parseFromURL(configText);
-        
-        v2rayURL.inbound['port'] = 10808;
-        v2rayURL.dns = {
-          "servers": _activeVerifiedDnsList
-        };
-        
-        configText = v2rayURL.getFullConfiguration();
-        _remark = v2rayURL.remark;
-        
-        if (updateUI) {
-          String protocol = "نامشخص";
-          final String typeStr = v2rayURL.runtimeType.toString().toLowerCase();
-          if (typeStr.contains("vless")) {
-            protocol = "VLESS";
-          } else if (typeStr.contains("vmess")) {
-            protocol = "VMESS";
-          } else if (typeStr.contains("trojan")) {
-            protocol = "TROJAN";
-          } else if (typeStr.contains("shadowsocks") || typeStr.contains("ss")) {
-            protocol = "SHADOWSOCKS";
-          } else if (typeStr.contains("socks")) {
-            protocol = "SOCKS";
-          }
+  Widget _buildConnectionTelemetryCard(bool isConnected) {
+    if (!isConnected) return const SizedBox.shrink();
 
-          if (mounted) {
-            setState(() {
-              _serverName = v2rayURL.remark;
-              _protocolType = protocol;
-            });
-          }
-        }
-      } catch (e) {
-        _showSnackBar(_t("config_err"));
-        return;
-      }
-    }
-
-    try {
-      final Map<String, dynamic> configMap = jsonDecode(configText);
-      
-      if (configMap.containsKey('inbounds') && configMap['inbounds'] is List) {
-        final List<dynamic> inbounds = configMap['inbounds'];
-        for (var inbound in inbounds) {
-          if (inbound is Map<String, dynamic>) {
-            inbound['sniffing'] = {
-              "enabled": true,
-              "destOverride": ["http", "tls", "quic"]
-            };
-          }
-        }
-      }
-
-      configMap['dns'] = {
-        "servers": [
-          ..._activeVerifiedDnsList,
-          "localhost"
-        ],
-        "queryStrategy": "UseIP"
-      };
-
-      configMap['routing'] = {
-        "domainStrategy": "IPIfNonMatch",
-        "rules": [
-          {
-            "type": "field",
-            "port": 53,
-            "outboundTag": "dns"
-          }
-        ]
-      };
-
-      if (configMap.containsKey('outbounds') && configMap['outbounds'] is List) {
-        final List<dynamic> outbounds = configMap['outbounds'];
-        for (var outbound in outbounds) {
-          if (outbound is Map<String, dynamic> && outbound.containsKey('streamSettings')) {
-            final dynamic streamSettings = outbound['streamSettings'];
-            if (streamSettings is Map<String, dynamic> && streamSettings.containsKey('tlsSettings')) {
-              final dynamic tlsSettings = streamSettings['tlsSettings'];
-              if (tlsSettings is Map<String, dynamic>) {
-                tlsSettings.remove('allowInsecure');
-              }
-            }
-          }
-        }
-      }
-      
-      configText = jsonEncode(configMap);
-      _fullConfigJson = configText;
-    } catch (e) {
-      _showSnackBar("Error processing configuration");
-    }
-  }
-
-  void _pasteFromClipboard() async {
-    final ClipboardData? clipboardData = await Clipboard.getData('text/plain');
-    if (clipboardData != null && clipboardData.text != null) {
-      _parseAndSaveConfig(clipboardData.text!.trim());
-    } else {
-      _showSnackBar(_t("clipboard_empty"));
-    }
-  }
-
-  void _openConfigBottomSheet() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: const Color(0xFF1E293B),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    return Container(
+      margin: const EdgeInsets.only(top: 14, bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E293B),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: _publicIp != null ? const Color(0xFF10B981).withOpacity(0.6) : const Color(0xFF3B82F6).withOpacity(0.3),
+          width: 1.2,
+        ),
       ),
-      builder: (context) {
-        return Padding(
-          padding: EdgeInsets.only(
-            bottom: MediaQuery.of(context).viewInsets.bottom + 20,
-            top: 20,
-            left: 20,
-            right: 20,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Center(
-                child: Container(
-                  width: 50,
-                  height: 5,
-                  decoration: BoxDecoration(
-                    color: Colors.grey,
-                    borderRadius: BorderRadius.circular(10),
+      child: _isTestingIp
+          ? Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF38BDF8)),
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  _t("testing_ip_info"),
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF38BDF8), fontWeight: FontWeight.bold),
+                ),
+              ],
+            )
+          : Row(
+              children: [
+                Text(
+                  _ipFlagEmoji ?? "🌐",
+                  style: const TextStyle(fontSize: 26),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              _ipCountry ?? "Connected Server",
+                              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.white),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (_ipCountryCode != null && _ipCountryCode!.isNotEmpty) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF3B82F6).withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(5),
+                              ),
+                              child: Text(
+                                _ipCountryCode!,
+                                style: const TextStyle(fontSize: 9.5, color: Color(0xFF60A5FA), fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        "${_t("public_ip_label")}: ${_publicIp ?? '...'}",
+                        style: const TextStyle(fontSize: 11.5, color: Colors.grey, fontFamily: 'monospace'),
+                      ),
+                    ],
                   ),
                 ),
-              ),
-              const SizedBox(height: 20),
-              Text(
-                _t("manual_input_title"),
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 15),
-              TextField(
-                controller: _configController,
-                maxLines: 4,
-                decoration: const InputDecoration(
-                  labelText: 'Vless, Vmess, Trojan Link',
-                  hintText: 'Paste connection link here',
-                ),
-              ),
-              const SizedBox(height: 15),
-              ElevatedButton.icon(
-                onPressed: () {
-                  _pasteFromClipboard();
-                  Navigator.pop(context);
-                },
-                icon: const Icon(Icons.paste),
-                label: Text(_t("paste_btn")),
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                ),
-              ),
-              const SizedBox(height: 10),
-              ElevatedButton(
-                onPressed: () {
-                  _parseAndSaveConfig(_configController.text.trim());
-                  Navigator.pop(context);
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Theme.of(context).colorScheme.primary,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                ),
-                child: Text(_t("save_btn")),
-              ),
-            ],
-          ),
-        );
-      },
+                if (_realPingMs != null)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF10B981).withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFF10B981).withOpacity(0.4)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.bolt_rounded, size: 14, color: Color(0xFF10B981)),
+                        const SizedBox(width: 2),
+                        Text(
+                          "$_realPingMs ${_t("ms")}",
+                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF10B981)),
+                        ),
+                      ],
+                    ),
+                  ),
+                IconButton(
+                  icon: const Icon(Icons.refresh_rounded, size: 18, color: Colors.grey),
+                  tooltip: "Re-test",
+                  onPressed: _fetchPublicIpAndPing,
+                )
+              ],
+            ),
     );
   }
 
@@ -1842,21 +2397,13 @@ class _HomePageState extends State<HomePage> {
         body: Column(
           children: [
             if (_bannerMessage != null)
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 350),
+              Container(
                 margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 decoration: BoxDecoration(
                   color: _bannerColor.withOpacity(0.18),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: _bannerColor, width: 1.2),
-                  boxShadow: [
-                    BoxShadow(
-                      color: _bannerColor.withOpacity(0.2),
-                      blurRadius: 10,
-                      spreadRadius: 2,
-                    )
-                  ],
                 ),
                 child: Row(
                   children: [
@@ -1865,11 +2412,7 @@ class _HomePageState extends State<HomePage> {
                     Expanded(
                       child: Text(
                         _bannerMessage!,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          color: _bannerColor,
-                        ),
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: _bannerColor),
                       ),
                     ),
                   ],
@@ -1880,11 +2423,7 @@ class _HomePageState extends State<HomePage> {
         ),
         bottomNavigationBar: BottomNavigationBar(
           currentIndex: _currentTabIndex,
-          onTap: (index) {
-            setState(() {
-              _currentTabIndex = index;
-            });
-          },
+          onTap: (index) => setState(() => _currentTabIndex = index),
           type: BottomNavigationBarType.fixed,
           backgroundColor: widget.isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFFFFFFF),
           selectedItemColor: Theme.of(context).colorScheme.primary,
@@ -1892,30 +2431,12 @@ class _HomePageState extends State<HomePage> {
           selectedFontSize: 11,
           unselectedFontSize: 10,
           items: [
-            BottomNavigationBarItem(
-              icon: const Icon(Icons.dashboard_rounded),
-              label: _t("tab_dashboard"),
-            ),
-            BottomNavigationBarItem(
-              icon: const Icon(Icons.bolt_rounded),
-              label: _t("tab_aether"),
-            ),
-            BottomNavigationBarItem(
-              icon: const Icon(Icons.security_rounded),
-              label: _t("tab_tor"),
-            ),
-            BottomNavigationBarItem(
-              icon: const Icon(Icons.settings_rounded),
-              label: _t("tab_settings"),
-            ),
-            BottomNavigationBarItem(
-              icon: const Icon(Icons.verified_user_rounded),
-              label: _t("tab_privacy"),
-            ),
-            BottomNavigationBarItem(
-              icon: const Icon(Icons.volunteer_activism_rounded),
-              label: _t("tab_contact"),
-            ),
+            BottomNavigationBarItem(icon: const Icon(Icons.dashboard_rounded), label: _t("tab_dashboard")),
+            BottomNavigationBarItem(icon: const Icon(Icons.bolt_rounded), label: _t("tab_aether")),
+            BottomNavigationBarItem(icon: const Icon(Icons.security_rounded), label: _t("tab_tor")),
+            BottomNavigationBarItem(icon: const Icon(Icons.settings_rounded), label: _t("tab_settings")),
+            BottomNavigationBarItem(icon: const Icon(Icons.verified_user_rounded), label: _t("tab_privacy")),
+            BottomNavigationBarItem(icon: const Icon(Icons.volunteer_activism_rounded), label: _t("tab_contact")),
           ],
         ),
       ),
@@ -1924,20 +2445,13 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildCurrentTabContent() {
     switch (_currentTabIndex) {
-      case 0:
-        return _buildDashboardTab();
-      case 1:
-        return _buildAetherTab();
-      case 2:
-        return _buildTorTab();
-      case 3:
-        return _buildSettingsTab();
-      case 4:
-        return _buildPrivacyTab();
-      case 5:
-        return _buildContactTab();
-      default:
-        return _buildDashboardTab();
+      case 0: return _buildDashboardTab();
+      case 1: return _buildAetherTab();
+      case 2: return _buildTorTab();
+      case 3: return _buildSettingsTab();
+      case 4: return _buildPrivacyTab();
+      case 5: return _buildContactTab();
+      default: return _buildDashboardTab();
     }
   }
 
@@ -1945,8 +2459,10 @@ class _HomePageState extends State<HomePage> {
     return ValueListenableBuilder<V2RayStatus>(
       valueListenable: v2rayStatus,
       builder: (context, value, child) {
-        final isConnected = value.state == "CONNECTED" && !_isAetherActive && !_isTorActive;
-        final isConnecting = (value.state == "CONNECTING" || _isScanningIPs) && !_isAetherActive && !_isTorActive;
+        final isConnected = _activeEngine == ActiveEngine.dashboard && value.state == "CONNECTED";
+        final isConnecting = (_activeEngine == ActiveEngine.dashboard && value.state == "CONNECTING") || 
+                             _isScanningIPs || 
+                             (_isTransitioning && _activeEngine == ActiveEngine.dashboard);
 
         return SingleChildScrollView(
           padding: const EdgeInsets.symmetric(horizontal: 20.0),
@@ -2032,7 +2548,7 @@ class _HomePageState extends State<HomePage> {
               
               Center(
                 child: GestureDetector(
-                  onTap: isConnected ? _disconnect : _connect,
+                  onTap: isConnected ? _disconnectCurrent : _connectDashboard,
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 300),
                     width: 160,
@@ -2111,8 +2627,11 @@ class _HomePageState extends State<HomePage> {
                   ),
                 ),
               ),
+
+              // نمایش کارت تلمتری و پرچم کشور در صورت اتصال
+              _buildConnectionTelemetryCard(isConnected),
               
-              const SizedBox(height: 25),
+              const SizedBox(height: 15),
 
               GestureDetector(
                 onTap: _openConfigBottomSheet,
@@ -2175,42 +2694,7 @@ class _HomePageState extends State<HomePage> {
                 ),
 
               const SizedBox(height: 15),
-
-              GridView.count(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                crossAxisCount: 2,
-                childAspectRatio: 1.6,
-                crossAxisSpacing: 12,
-                mainAxisSpacing: 12,
-                children: [
-                  _buildStatCard(
-                    _t("down_speed"),
-                    _formatBytes(isConnected ? value.downloadSpeed : 0, isSpeed: true),
-                    Icons.arrow_downward,
-                    const Color(0xFF10B981),
-                  ),
-                  _buildStatCard(
-                    _t("up_speed"),
-                    _formatBytes(isConnected ? value.uploadSpeed : 0, isSpeed: true),
-                    Icons.arrow_upward,
-                    const Color(0xFF3B82F6),
-                  ),
-                  _buildStatCard(
-                    _t("total_down"),
-                    _formatBytes(isConnected ? value.download : 0),
-                    Icons.cloud_download,
-                    Colors.blueGrey,
-                  ),
-                  _buildStatCard(
-                    _t("total_up"),
-                    _formatBytes(isConnected ? value.upload : 0),
-                    Icons.cloud_upload,
-                    Colors.blueGrey,
-                  ),
-                ],
-              ),
-              
+              _buildStatsGrid(isConnected, value),
               const SizedBox(height: 15),
 
               Center(
@@ -2238,8 +2722,9 @@ class _HomePageState extends State<HomePage> {
     return ValueListenableBuilder<V2RayStatus>(
       valueListenable: v2rayStatus,
       builder: (context, value, child) {
-        final isConnected = _isAetherActive && value.state == "CONNECTED";
-        final isConnecting = _isAetherConnecting;
+        final isConnected = _activeEngine == ActiveEngine.aether && value.state == "CONNECTED";
+        final isConnecting = (_activeEngine == ActiveEngine.aether && value.state == "CONNECTING") ||
+                             (_isTransitioning && _activeEngine == ActiveEngine.none);
 
         return SingleChildScrollView(
           padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 10.0),
@@ -2262,7 +2747,7 @@ class _HomePageState extends State<HomePage> {
                   onTap: isConnecting
                       ? null
                       : isConnected
-                          ? _disconnectAether
+                          ? _disconnectCurrent
                           : _connectAether,
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 300),
@@ -2341,7 +2826,10 @@ class _HomePageState extends State<HomePage> {
                 ),
               ),
 
-              const SizedBox(height: 25),
+              // نمایش کارت تلمتری و پرچم کشور در صورت اتصال
+              _buildConnectionTelemetryCard(isConnected),
+
+              const SizedBox(height: 15),
 
               Text(
                 _t("aether_mode_select"),
@@ -2391,41 +2879,7 @@ class _HomePageState extends State<HomePage> {
               ),
 
               const SizedBox(height: 15),
-
-              GridView.count(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                crossAxisCount: 2,
-                childAspectRatio: 1.6,
-                crossAxisSpacing: 12,
-                mainAxisSpacing: 12,
-                children: [
-                  _buildStatCard(
-                    _t("down_speed"),
-                    _formatBytes(isConnected ? value.downloadSpeed : 0, isSpeed: true),
-                    Icons.arrow_downward,
-                    const Color(0xFF06B6D4),
-                  ),
-                  _buildStatCard(
-                    _t("up_speed"),
-                    _formatBytes(isConnected ? value.uploadSpeed : 0, isSpeed: true),
-                    Icons.arrow_upward,
-                    const Color(0xFF3B82F6),
-                  ),
-                  _buildStatCard(
-                    _t("total_down"),
-                    _formatBytes(isConnected ? value.download : 0),
-                    Icons.cloud_download,
-                    Colors.blueGrey,
-                  ),
-                  _buildStatCard(
-                    _t("total_up"),
-                    _formatBytes(isConnected ? value.upload : 0),
-                    Icons.cloud_upload,
-                    Colors.blueGrey,
-                  ),
-                ],
-              ),
+              _buildStatsGrid(isConnected, value),
               const SizedBox(height: 15),
             ],
           ),
@@ -2438,8 +2892,8 @@ class _HomePageState extends State<HomePage> {
     return ValueListenableBuilder<V2RayStatus>(
       valueListenable: v2rayStatus,
       builder: (context, value, child) {
-        final isConnected = _isTorActive && value.state == "CONNECTED";
-        final isConnecting = _isTorConnecting;
+        final isConnected = _activeEngine == ActiveEngine.tor && value.state == "CONNECTED";
+        final isConnecting = _isTransitioning && _activeEngine != ActiveEngine.tor;
 
         return SingleChildScrollView(
           padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 10.0),
@@ -2503,7 +2957,7 @@ class _HomePageState extends State<HomePage> {
                   onTap: isConnecting
                       ? null
                       : isConnected
-                          ? _disconnectTor
+                          ? _disconnectCurrent
                           : _connectTor,
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 300),
@@ -2617,7 +3071,10 @@ class _HomePageState extends State<HomePage> {
                 ),
               ),
 
-              const SizedBox(height: 25),
+              // نمایش کارت تلمتری و پرچم کشور در صورت اتصال
+              _buildConnectionTelemetryCard(isConnected),
+
+              const SizedBox(height: 15),
 
               Text(
                 _t("tor_mode_select"),
@@ -2687,41 +3144,7 @@ class _HomePageState extends State<HomePage> {
                 ),
 
               const SizedBox(height: 15),
-
-              GridView.count(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                crossAxisCount: 2,
-                childAspectRatio: 1.6,
-                crossAxisSpacing: 12,
-                mainAxisSpacing: 12,
-                children: [
-                  _buildStatCard(
-                    _t("down_speed"),
-                    _formatBytes(isConnected ? value.downloadSpeed : 0, isSpeed: true),
-                    Icons.arrow_downward,
-                    const Color(0xFFC084FC),
-                  ),
-                  _buildStatCard(
-                    _t("up_speed"),
-                    _formatBytes(isConnected ? value.uploadSpeed : 0, isSpeed: true),
-                    Icons.arrow_upward,
-                    const Color(0xFF3B82F6),
-                  ),
-                  _buildStatCard(
-                    _t("total_down"),
-                    _formatBytes(isConnected ? value.download : 0),
-                    Icons.cloud_download,
-                    Colors.blueGrey,
-                  ),
-                  _buildStatCard(
-                    _t("total_up"),
-                    _formatBytes(isConnected ? value.upload : 0),
-                    Icons.cloud_upload,
-                    Colors.blueGrey,
-                  ),
-                ],
-              ),
+              _buildStatsGrid(isConnected, value),
               const SizedBox(height: 15),
             ],
           ),
@@ -2903,12 +3326,233 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  Widget _buildStatsGrid(bool isConnected, V2RayStatus value) {
+    return GridView.count(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      crossAxisCount: 2,
+      childAspectRatio: 1.6,
+      crossAxisSpacing: 12,
+      mainAxisSpacing: 12,
+      children: [
+        _buildStatCard(
+          _t("down_speed"),
+          _formatBytes(isConnected ? value.downloadSpeed : 0, isSpeed: true),
+          Icons.arrow_downward,
+          const Color(0xFF10B981),
+        ),
+        _buildStatCard(
+          _t("up_speed"),
+          _formatBytes(isConnected ? value.uploadSpeed : 0, isSpeed: true),
+          Icons.arrow_upward,
+          const Color(0xFF3B82F6),
+        ),
+        _buildStatCard(
+          _t("total_down"),
+          _formatBytes(isConnected ? value.download : 0),
+          Icons.cloud_download,
+          Colors.blueGrey,
+        ),
+        _buildStatCard(
+          _t("total_up"),
+          _formatBytes(isConnected ? value.upload : 0),
+          Icons.cloud_upload,
+          Colors.blueGrey,
+        ),
+      ],
+    );
+  }
+
   Widget _buildSettingsTab() {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          // ۱. کارت بایپس ایران (Split Tunneling)
+          Card(
+            color: Theme.of(context).colorScheme.surface,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: BorderSide(
+                color: _bypassIran ? const Color(0xFF10B981) : Colors.grey.withOpacity(0.2),
+                width: 1.2,
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    backgroundColor: _bypassIran 
+                        ? const Color(0xFF10B981).withOpacity(0.15) 
+                        : Colors.grey.withOpacity(0.15),
+                    child: Icon(
+                      Icons.alt_route_rounded, 
+                      color: _bypassIran ? const Color(0xFF10B981) : Colors.grey, 
+                      size: 22,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _t("bypass_iran_title"),
+                          style: TextStyle(
+                            fontSize: 14, 
+                            fontWeight: FontWeight.bold,
+                            color: _bypassIran ? const Color(0xFF10B981) : null,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _t("bypass_iran_desc"),
+                          style: const TextStyle(fontSize: 11, color: Colors.grey),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Switch(
+                    value: _bypassIran,
+                    activeColor: const Color(0xFF10B981),
+                    onChanged: (val) {
+                      _setBypassIranSetting(val);
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 15),
+
+          // ۲. کارت لاگ‌ها و عیب‌یابی زنده
+          Card(
+            color: Theme.of(context).colorScheme.surface,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: const BorderSide(color: Color(0xFF3B82F6), width: 1.2),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const CircleAvatar(
+                        backgroundColor: Color(0xFF3B82F6),
+                        child: Icon(Icons.terminal_rounded, color: Colors.white, size: 22),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _t("logs_title"),
+                              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              _t("logs_subtitle"),
+                              style: const TextStyle(fontSize: 11, color: Colors.grey),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => LogsScreen(
+                              currentLang: widget.currentLang,
+                              torChannel: _torChannel,
+                              aetherChannel: _aetherChannel,
+                            ),
+                          ),
+                        );
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF3B82F6),
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                      ),
+                      icon: const Icon(Icons.receipt_long_rounded, size: 18),
+                      label: Text(
+                        _t("logs_view_btn"),
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  )
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 15),
+
+          // ۳. کارت بهینه‌سازی باتری
+          Card(
+            color: Theme.of(context).colorScheme.surface,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const CircleAvatar(
+                        backgroundColor: Colors.amber,
+                        child: Icon(Icons.battery_charging_full_rounded, color: Colors.black, size: 22),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _t("battery_opt_title"),
+                              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              _t("battery_opt_desc"),
+                              style: const TextStyle(fontSize: 11, color: Colors.grey),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () async {
+                        try {
+                          await _aetherChannel.invokeMethod('requestIgnoreBatteryOptimizations');
+                        } catch (_) {}
+                      },
+                      icon: const Icon(Icons.flash_auto_rounded, size: 16),
+                      label: Text(_t("battery_opt_btn"), style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 15),
+
+          // ۴. کارت زبان و تم
           Card(
             color: Theme.of(context).colorScheme.surface,
             child: Padding(
@@ -3105,6 +3749,243 @@ class _HomePageState extends State<HomePage> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// =========================================================================
+// صفحه اختصاصی و حرفه‌ای نمایش و مدیریت لاگ‌ها (LogsScreen)
+// =========================================================================
+class LogsScreen extends StatefulWidget {
+  final String currentLang;
+  final MethodChannel torChannel;
+  final MethodChannel aetherChannel;
+
+  const LogsScreen({
+    super.key,
+    required this.currentLang,
+    required this.torChannel,
+    required this.aetherChannel,
+  });
+
+  @override
+  State<LogsScreen> createState() => _LogsScreenState();
+}
+
+class _LogsScreenState extends State<LogsScreen> {
+  final ScrollController _scrollController = ScrollController();
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = "";
+
+  void _scrollToBottom() {
+    if (_scrollController.hasClients) {
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    }
+  }
+
+  void _clearLogs() async {
+    AppLogger.clear();
+    try {
+      await widget.torChannel.invokeMethod('clearNativeLogs');
+      await widget.aetherChannel.invokeMethod('clearNativeLogs');
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {});
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(widget.currentLang == "fa" ? "گزارشات پاک‌سازی شدند." : "Logs cleared."),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  Color _getTagColor(String tag) {
+    switch (tag.toUpperCase()) {
+      case "ERROR":
+      case "TORERROR":
+      case "AETHERERROR":
+        return Colors.redAccent;
+      case "TOR":
+      case "TORCORE":
+      case "TORCONFIG":
+      case "TORPROCESS":
+        return const Color(0xFFC084FC);
+      case "AETHER":
+      case "AETHERCORE":
+      case "AETHERCOMMAND":
+      case "AETHERPROCESS":
+        return const Color(0xFF06B6D4);
+      case "V2RAY":
+      case "V2RAY-CORE":
+        return const Color(0xFF10B981);
+      case "L7-SCAN":
+        return const Color(0xFFF59E0B);
+      case "DNS-PROBE":
+      case "DNS-RESCUE":
+        return const Color(0xFF38BDF8);
+      case "TELEMETRY":
+        return Colors.pinkAccent;
+      case "NATIVE":
+      case "NATIVELOADER":
+        return Colors.tealAccent;
+      default:
+        return Colors.blueAccent;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isFa = widget.currentLang == "fa";
+    return Directionality(
+      textDirection: isFa ? TextDirection.rtl : TextDirection.ltr,
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(
+            isFa ? "گزارشات و لاگ‌های سیستم" : "System Logs & Diagnostics",
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.copy_all_rounded),
+              tooltip: isFa ? "کپی همه" : "Copy All",
+              onPressed: () {
+                final text = AppLogger.getAllLogsFormatted();
+                if (text.isNotEmpty) {
+                  Clipboard.setData(ClipboardData(text: text));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(isFa ? "تمامی لاگ‌ها کپی شدند!" : "All logs copied to clipboard!"),
+                      duration: const Duration(seconds: 2),
+                    ),
+                  );
+                }
+              },
+            ),
+            IconButton(
+              icon: const Icon(Icons.delete_sweep_rounded),
+              tooltip: isFa ? "پاک‌سازی" : "Clear All",
+              onPressed: _clearLogs,
+            ),
+          ],
+        ),
+        body: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+              child: TextField(
+                controller: _searchController,
+                onChanged: (val) {
+                  setState(() {
+                    _searchQuery = val.toLowerCase().trim();
+                  });
+                },
+                decoration: InputDecoration(
+                  hintText: isFa ? "جستجو در متن لاگ‌ها..." : "Filter logs...",
+                  hintStyle: const TextStyle(fontSize: 12, color: Colors.grey),
+                  prefixIcon: const Icon(Icons.search, size: 20),
+                  suffixIcon: _searchQuery.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.clear, size: 18),
+                          onPressed: () {
+                            _searchController.clear();
+                            setState(() {
+                              _searchQuery = "";
+                            });
+                          },
+                        )
+                      : null,
+                  filled: true,
+                  fillColor: const Color(0xFF1E293B),
+                  contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+              ),
+            ),
+            Expanded(
+              child: ValueListenableBuilder<int>(
+                valueListenable: AppLogger.logCountNotifier,
+                builder: (context, count, child) {
+                  final logs = AppLogger.currentLogs;
+                  final filteredLogs = _searchQuery.isEmpty
+                      ? logs
+                      : logs.where((e) => e.format().toLowerCase().contains(_searchQuery)).toList();
+
+                  if (filteredLogs.isEmpty) {
+                    return Center(
+                      child: Text(
+                        isFa ? "هنوز هیچ لاگی ثبت نشده است." : "No logs available.",
+                        style: const TextStyle(color: Colors.grey, fontSize: 13),
+                      ),
+                    );
+                  }
+
+                  return Container(
+                    margin: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF090D16),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: Colors.white10),
+                    ),
+                    child: ListView.builder(
+                      controller: _scrollController,
+                      itemCount: filteredLogs.length,
+                      itemBuilder: (context, index) {
+                        final entry = filteredLogs[index];
+                        final tagColor = _getTagColor(entry.tag);
+
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 3.0),
+                          child: SelectableText.rich(
+                            TextSpan(
+                              children: [
+                                TextSpan(
+                                  text: "[${entry.time.hour.toString().padLeft(2, '0')}:${entry.time.minute.toString().padLeft(2, '0')}:${entry.time.second.toString().padLeft(2, '0')}.${entry.time.millisecond.toString().padLeft(3, '0')}] ",
+                                  style: const TextStyle(color: Colors.white38, fontSize: 11, fontFamily: 'monospace'),
+                                ),
+                                TextSpan(
+                                  text: "[${entry.tag}] ",
+                                  style: TextStyle(
+                                    color: tagColor,
+                                    fontSize: 11.5,
+                                    fontWeight: FontWeight.bold,
+                                    fontFamily: 'monospace',
+                                  ),
+                                ),
+                                TextSpan(
+                                  text: entry.message,
+                                  style: TextStyle(
+                                    color: entry.isError ? Colors.redAccent : Colors.white70,
+                                    fontSize: 11.5,
+                                    fontFamily: 'monospace',
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+        floatingActionButton: FloatingActionButton.small(
+          backgroundColor: const Color(0xFF3B82F6),
+          onPressed: _scrollToBottom,
+          tooltip: isFa ? "اسکرول به انتها" : "Scroll to bottom",
+          child: const Icon(Icons.arrow_downward, color: Colors.white),
         ),
       ),
     );

@@ -2,7 +2,7 @@ name: redcloud_android
 description: "RedCloud VPN - Multi-Core Android Client (V2Ray, Aether & Tor Engines)."
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 1.2.0+3
 
 environment:
   sdk: ^3.12.1
