@@ -31,26 +31,26 @@ import java.util.regex.Pattern
 import kotlin.concurrent.thread
 
 class MainActivity : FlutterActivity() {
-    
+
     companion object {
         private const val TAG = "RedCloudNative"
         private const val AETHER_CHANNEL = "com.redcloud.vpn/aether_channel"
         private const val TOR_CHANNEL = "com.redcloud.vpn/tor_channel"
 
         @Volatile
-        private var aetherProcess: Process? = null
+        var aetherProcess: Process? = null
 
         @Volatile
-        private var torProcess: Process? = null
+        var torProcess: Process? = null
 
         @Volatile
-        private var torBootstrapPercent: Int = 0
+        var torBootstrapPercent: Int = 0
 
         @Volatile
-        private var torLastLogLine: String = "آماده‌سازی"
+        var torLastLogLine: String = "آماده‌سازی"
 
         private const val MAX_NATIVE_LOGS = 400
-        private val nativeLogsBuffer = ConcurrentLinkedQueue<String>()
+        val nativeLogsBuffer = ConcurrentLinkedQueue<String>()
 
         @Volatile
         private var wakeLock: PowerManager.WakeLock? = null
@@ -72,15 +72,18 @@ class MainActivity : FlutterActivity() {
         try {
             if (wakeLock == null) {
                 val powerManager = applicationContext.getSystemService(Context.POWER_SERVICE) as PowerManager
-                wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "RedCloudVPN::CoreWakeLock")
+                wakeLock = powerManager.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK,
+                    "RedCloudVPN::CoreWakeLock"
+                )
                 wakeLock?.setReferenceCounted(false)
             }
             if (wakeLock?.isHeld == false) {
                 wakeLock?.acquire()
-                appendNativeLog("Power", "قفل پردازنده (WakeLock) فعال شد؛ پروسس‌ها در پس‌زمینه پایدار خواهند ماند.")
+                appendNativeLog("Power", "قفل پردازنده (WakeLock) فعال شد.")
             }
         } catch (e: Exception) {
-            appendNativeLog("PowerError", "خطا در دریافت WakeLock: ${e.message}")
+            appendNativeLog("PowerError", "خطا در فعال‌سازی WakeLock: ${e.message}")
         }
     }
 
@@ -112,7 +115,7 @@ class MainActivity : FlutterActivity() {
                     data = Uri.parse("package:$packageName")
                 }
                 startActivity(intent)
-                appendNativeLog("Power", "درخواست غیرفعال‌سازی بهینه‌سازی باتری ارسال شد.")
+                appendNativeLog("Power", "درخواست عدم بهینه‌سازی باتری ارسال شد.")
             } catch (e: Exception) {
                 try {
                     val fallbackIntent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
@@ -141,6 +144,7 @@ class MainActivity : FlutterActivity() {
                         runOnUiThread {
                             if (launched) {
                                 acquireWakeLock()
+                                RedCloudCoreService.start(applicationContext)
                                 result.success(true)
                             } else {
                                 result.error("START_FAILED", "امکان اجرای باینری Aether وجود ندارد", null)
@@ -153,6 +157,7 @@ class MainActivity : FlutterActivity() {
                     stopAetherEngine()
                     if (torProcess == null || torProcess?.isAlive == false) {
                         releaseWakeLock()
+                        RedCloudCoreService.stop(applicationContext)
                     }
                     result.success(true)
                 }
@@ -256,9 +261,10 @@ class MainActivity : FlutterActivity() {
                         runOnUiThread {
                             if (launched) {
                                 acquireWakeLock()
+                                RedCloudCoreService.start(applicationContext)
                                 result.success(true)
                             } else {
-                                result.error("TOR_START_FAILED", "خطا در استارت باینری تور", null)
+                                result.error("TOR_START_FAILED", "خطا در اجرای باینری تور", null)
                             }
                         }
                     }
@@ -268,6 +274,7 @@ class MainActivity : FlutterActivity() {
                     stopTorEngine()
                     if (aetherProcess == null || aetherProcess?.isAlive == false) {
                         releaseWakeLock()
+                        RedCloudCoreService.stop(applicationContext)
                     }
                     result.success(true)
                 }
@@ -306,10 +313,11 @@ class MainActivity : FlutterActivity() {
                 }
 
                 "killAllCores" -> {
-                    appendNativeLog("Lifecycle", "متوقف‌سازی تمام هسته‌ها و آزادسازی پورت‌ها توسط درخواست کاربر...")
+                    appendNativeLog("Lifecycle", "متوقف‌سازی تمامی هسته‌ها و آزادسازی کامل حافظه...")
                     stopTorEngine()
                     stopAetherEngine()
                     releaseWakeLock()
+                    RedCloudCoreService.stop(applicationContext)
                     result.success(true)
                 }
 
@@ -407,7 +415,7 @@ class MainActivity : FlutterActivity() {
         if (lockFile.exists()) {
             try {
                 lockFile.delete()
-                appendNativeLog("TorInit", "فایل lock قدیمی تور حذف شد.")
+                appendNativeLog("TorInit", "فایل lock قدیمی حذف شد.")
             } catch (_: Exception) {}
         }
 
@@ -424,7 +432,7 @@ class MainActivity : FlutterActivity() {
 
         val torBinary = getExecutableBinaryPath("tor")
         if (torBinary == null) {
-            appendNativeLog("TorError", "عدم دسترسی به باینری tor. فایل libtor.so را بررسی کنید.")
+            appendNativeLog("TorError", "عدم دسترسی به باینری tor.")
             return false
         }
 
@@ -506,7 +514,7 @@ class MainActivity : FlutterActivity() {
 
             val process = processBuilder.start()
             torProcess = process
-            appendNativeLog("TorProcess", "پروسس تور با موفقیت آغاز شد.")
+            appendNativeLog("TorProcess", "پروسس تور آغاز شد.")
 
             val bootstrapPattern = Pattern.compile("Bootstrapped\\s+(\\d+)%")
 
@@ -579,7 +587,6 @@ class MainActivity : FlutterActivity() {
             modeDir.mkdirs()
         }
 
-        // پاک‌سازی فایل‌های کَش فاسد شده
         try {
             modeDir.listFiles()?.forEach { file ->
                 if (file.name.endsWith(".toml") || file.name.contains("cache") || file.name.contains("endpoint")) {
@@ -728,7 +735,7 @@ class MainActivity : FlutterActivity() {
             connection.disconnect()
             val elapsed = System.currentTimeMillis() - start
             val success = responseCode in 200..399
-            appendNativeLog("Probe", "تست گذردهی واقعی ترافیک اَتر -> کد: $responseCode (${elapsed}ms)")
+            appendNativeLog("Probe", "تست گذردهی ترافیک اَتر -> کد: $responseCode (${elapsed}ms)")
             success
         } catch (e: Exception) {
             val elapsed = System.currentTimeMillis() - start
@@ -737,9 +744,6 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    // =========================================================================
-    // دریافت اطلاعات دقیق آی‌پی و پینگ خروجی مستقیم از تانل ساکس ۵
-    // =========================================================================
     private fun fetchTunneledIp(socksPort: Int, timeoutMs: Int): Map<String, Any>? {
         val start = System.currentTimeMillis()
         return try {
@@ -772,7 +776,6 @@ class MainActivity : FlutterActivity() {
                 null
             }
         } catch (e: Exception) {
-            // فال‌بک دوم از طریق Cloudflare CDN Trace با ساکس ۵
             try {
                 val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
                 val url = URL("https://cloudflare.com/cdn-cgi/trace")
@@ -812,9 +815,7 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
-        appendNativeLog("Lifecycle", "اکتیویتی به پس‌زمینه رفت یا متوقف شد؛ هسته‌ها تا زمان قطع صریح کاربر زنده می‌مانند.")
-        // فرآیندها و WakeLock در اینجا کشته نمی‌شوند تا اتصال VPN در پس‌زمینه پایدار بماند.
-        // خاموش‌سازی هسته‌ها صرفاً با فشردن دکمه Disconnect از طریق متد killAllCores یا stop انجام می‌شود.
+        appendNativeLog("Lifecycle", "پنجره برنامه بسته شد؛ هسته‌های ارتباطی در پس‌زمینه برای حفظ اینترنت زنده می‌مانند.")
         super.onDestroy()
     }
 }

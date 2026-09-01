@@ -9,24 +9,14 @@ import 'package:flutter_v2ray_client/flutter_v2ray.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-// ۱. آدرس ورکر مرکزی مدیریت اکانت‌های کلاودفلر
 const String workerApiUrl = "https://round-sea-8418.redcloudir.workers.dev";
-
-// ۲. آدرس خام فایل کانفیگ گیت‌هاب
 const String githubRawUrl = "https://raw.githubusercontent.com/Devtahas/Devtahas-redcloud-config/main/accounts.json";
-
-// ۳. اطلاعات تلگرام و کیف پول حمایت مالی
 const String telegramChannelUrl = "https://t.me/DevTaha_project";
 const String usdtBnbAddress = "0xDeda28Aa73Ec089A77B3fC616E0011a8fce12900";
-
-// شناسه پکیج اندروید برنامه جهت جداسازی سوکت‌های بومی از تونل VPN
 const String appPackageName = "com.redcloud.vpn.redcloud_android";
 
 enum ActiveEngine { none, dashboard, aether, tor }
 
-// =========================================================================
-// ساختار مدیریت لاگینگ یکپارچه، سبک و بدون افت فریم (AppLogger Engine)
-// =========================================================================
 class LogEntry {
   final DateTime time;
   final String tag;
@@ -106,13 +96,12 @@ class AppLogger {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  // خواندن تنظیمات اولیه زبان و تم از حافظه پایدار قبل از اجرای برنامه
   final SharedPreferences prefs = await SharedPreferences.getInstance();
   final String initialLang = prefs.getString('saved_app_language') ?? 'fa';
   final bool initialDarkMode = prefs.getBool('saved_dark_mode') ?? true;
   final bool isFirstRun = prefs.getBool('first_launch_lang_selected') != true;
 
-  AppLogger.log("SYSTEM", "RedCloud VPN Starting initialized.");
+  AppLogger.log("SYSTEM", "RedCloud VPN Initialized.");
   runApp(MyApp(
     initialLang: initialLang,
     initialDarkMode: initialDarkMode,
@@ -227,9 +216,9 @@ class _HomePageState extends State<HomePage> {
   Timer? _reportTimer;
   Timer? _torProgressTimer;
   Timer? _bannerTimer;
+  Timer? _heartbeatTimer;
   int _currentTabIndex = 0;
 
-  // اطلاعات تلمتری و موقعیت زنده آی‌پی خروجی فیلترشکن
   String? _publicIp;
   String? _ipCountry;
   String? _ipCountryCode;
@@ -546,16 +535,35 @@ class _HomePageState extends State<HomePage> {
     return String.fromCharCode(firstLetter) + String.fromCharCode(secondLetter);
   }
 
-  // =========================================================================
-  // پروتکل مستقیم و خالص SOCKS5 در دارت (بدون نیاز به کد نیتیو و بدون کرش)
-  // =========================================================================
-  Future<Map<String, dynamic>?> _querySocks5Json(int socksPort, String targetHost, String path, {int timeoutMs = 6000}) async {
+  void _startHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 25), (timer) async {
+      if (_activeEngine == ActiveEngine.none) {
+        timer.cancel();
+        return;
+      }
+      try {
+        int targetPort = 10808;
+        if (_activeEngine == ActiveEngine.aether) targetPort = 1819;
+        if (_activeEngine == ActiveEngine.tor) targetPort = 9050;
+
+        final socket = await Socket.connect('127.0.0.1', targetPort, timeout: const Duration(seconds: 2));
+        socket.destroy();
+      } catch (_) {}
+    });
+  }
+
+  void _stopHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+  }
+
+  Future<Map<String, dynamic>?> _querySocks5Json(int socksPort, String targetHost, String path, {int timeoutMs = 4500}) async {
     final stopwatch = Stopwatch()..start();
     Socket? socket;
     try {
       socket = await Socket.connect('127.0.0.1', socksPort, timeout: Duration(milliseconds: timeoutMs));
 
-      // ۱. ارسال احراز هویت اولیه SOCKS5
       socket.add([0x05, 0x01, 0x00]);
       await socket.flush();
 
@@ -567,12 +575,10 @@ class _HomePageState extends State<HomePage> {
         buffer.addAll(data);
 
         if (stage == 0) {
-          // پاسخ احراز هویت SOCKS5: [0x05, 0x00]
           if (buffer.length >= 2) {
             if (buffer[0] == 0x05 && buffer[1] == 0x00) {
               buffer.clear();
               stage = 1;
-              // ۲. درخواست CONNECT به دامنه‌ی مقصد روی پورت ۸۰
               final hostBytes = utf8.encode(targetHost);
               final connectReq = [
                 0x05, 0x01, 0x00, 0x03, hostBytes.length, ...hostBytes, 0x00, 0x50
@@ -584,12 +590,10 @@ class _HomePageState extends State<HomePage> {
             }
           }
         } else if (stage == 1) {
-          // پاسخ تایید اتصال SOCKS5: [0x05, 0x00, 0x00, ...]
           if (buffer.length >= 10) {
             if (buffer[0] == 0x05 && buffer[1] == 0x00) {
               buffer.clear();
               stage = 2;
-              // ۳. ارسال درخواست خام HTTP
               final httpRequest = "GET $path HTTP/1.1\r\n"
                   "Host: $targetHost\r\n"
                   "User-Agent: Mozilla/5.0 (Android; Linux)\r\n"
@@ -601,7 +605,6 @@ class _HomePageState extends State<HomePage> {
             }
           }
         } else if (stage == 2) {
-          // دریافت دیتای HTTP خروجی از تانل
           final responseText = utf8.decode(buffer, allowMalformed: true);
           if (responseText.contains("\r\n\r\n")) {
             final parts = responseText.split("\r\n\r\n");
@@ -649,18 +652,16 @@ class _HomePageState extends State<HomePage> {
       });
     }
 
-    int targetSocksPort = 10808; // پیش‌فرض داشبورد V2Ray
+    int targetSocksPort = 10808;
     if (_activeEngine == ActiveEngine.aether) targetSocksPort = 1819;
     if (_activeEngine == ActiveEngine.tor) targetSocksPort = 9050;
 
     try {
-      // استعلام اول از ip-api.com
-      Map<String, dynamic>? data = await _querySocks5Json(targetSocksPort, "ip-api.com", "/json/", timeoutMs: 4000);
+      Map<String, dynamic>? data = await _querySocks5Json(targetSocksPort, "ip-api.com", "/json/", timeoutMs: 3500);
       
-      // فال‌بک دوم از سرویس ipwho.is در صورت عدم پاسخ‌دهی سرور اول
       if (data == null || data['status'] != 'success') {
         await Future.delayed(const Duration(milliseconds: 300));
-        final fallbackData = await _querySocks5Json(targetSocksPort, "ipwho.is", "/", timeoutMs: 4500);
+        final fallbackData = await _querySocks5Json(targetSocksPort, "ipwho.is", "/", timeoutMs: 4000);
         if (fallbackData != null && (fallbackData['success'] == true || fallbackData['ip'] != null)) {
           data = {
             'status': 'success',
@@ -692,7 +693,7 @@ class _HomePageState extends State<HomePage> {
         }
       }
     } catch (e) {
-      AppLogger.log("TELEMETRY", "خطا در استعلام آی‌پی: $e");
+      AppLogger.log("TELEMETRY", "استعلام تلمتری: $e");
     } finally {
       if (mounted && _isTestingIp) {
         setState(() {
@@ -842,7 +843,7 @@ class _HomePageState extends State<HomePage> {
     try {
       final SharedPreferences prefs = await SharedPreferences.getInstance();
       await prefs.setBool('bypass_iran_traffic', value);
-      AppLogger.log("ROUTING", "وضعیت بایپس ایران تغییر کرد: $value");
+      AppLogger.log("ROUTING", "وضعیت بایپس ایران: $value");
     } catch (_) {}
 
     if (_selectedAccountIndex >= 0 && _selectedAccountIndex < _fetchedAccounts.length) {
@@ -871,20 +872,17 @@ class _HomePageState extends State<HomePage> {
           } catch (_) {}
 
           if (engine == ActiveEngine.aether && aetherAlive) {
-            if (mounted) {
-              setState(() => _activeEngine = ActiveEngine.aether);
-            }
-            AppLogger.log("STATE", "وضعیت اتصال اَتر از پس‌زمینه با موفقیت بازیابی شد.");
+            if (mounted) setState(() => _activeEngine = ActiveEngine.aether);
+            _startHeartbeat();
+            AppLogger.log("STATE", "وضعیت اتصال اَتر از پس‌زمینه بازیابی شد.");
           } else if (engine == ActiveEngine.tor && torAlive) {
-            if (mounted) {
-              setState(() => _activeEngine = ActiveEngine.tor);
-            }
-            AppLogger.log("STATE", "وضعیت اتصال تور از پس‌زمینه با موفقیت بازیابی شد.");
+            if (mounted) setState(() => _activeEngine = ActiveEngine.tor);
+            _startHeartbeat();
+            AppLogger.log("STATE", "وضعیت اتصال تور از پس‌زمینه بازیابی شد.");
           } else if (engine == ActiveEngine.dashboard) {
-            if (mounted) {
-              setState(() => _activeEngine = ActiveEngine.dashboard);
-            }
-            AppLogger.log("STATE", "وضعیت اتصال داشبورد از پس‌زمینه با موفقیت بازیابی شد.");
+            if (mounted) setState(() => _activeEngine = ActiveEngine.dashboard);
+            _startHeartbeat();
+            AppLogger.log("STATE", "وضعیت اتصال داشبورد از پس‌زمینه بازیابی شد.");
           }
         }
       }
@@ -930,6 +928,7 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
+    _stopHeartbeat();
     _logTimer?.cancel();
     _reportTimer?.cancel();
     _torProgressTimer?.cancel();
@@ -941,6 +940,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _resetAllEngines() async {
+    _stopHeartbeat();
     _torProgressTimer?.cancel();
     await flutterV2ray.stopV2Ray();
     try { await _torChannel.invokeMethod('killAllCores'); } catch (_) {}
@@ -949,9 +949,6 @@ class _HomePageState extends State<HomePage> {
     await Future.delayed(const Duration(milliseconds: 300));
   }
 
-  // =========================================================================
-  // الگوریتم پکت خام UDP جهت تست و فیلتر کردن مسمومیت دی‌ان‌اس (DNS Anti-Poisoning)
-  // =========================================================================
   Future<Map<String, dynamic>?> _verifyDnsIp(String ip, {int timeoutMs = 1500}) async {
     RawDatagramSocket? socket;
     try {
@@ -1075,9 +1072,6 @@ class _HomePageState extends State<HomePage> {
     return ["8.8.8.8", "9.9.9.9", "1.1.1.1"];
   }
 
-  // =========================================================================
-  // اسکنر واقعی لایه ۷ کلودفلر (Layer-7 WebSocket + TLS Handshake Probe)
-  // =========================================================================
   Future<int?> _testIpLayer7(String ip, String host, String path, {int timeoutMs = 1800}) async {
     final stopwatch = Stopwatch()..start();
     Socket? rawSocket;
@@ -1241,13 +1235,16 @@ class _HomePageState extends State<HomePage> {
     return bestIP.isNotEmpty ? bestIP : "104.20.5.5";
   }
 
-  // =========================================================================
-  // روتینگ ۱۰۰٪ پایدار با آزادی ترافیک سوکت و مجهز به Bypass Iran
-  // =========================================================================
   String _generateBridgeV2RayConfig(int socksPort, String outboundTag) {
     final List<Map<String, dynamic>> rules = [];
 
-    // ۱. افزودن روتینگ دامنه‌ای مستقیم برای ایران (بدون نیاز به فایل geosite.dat)
+    // ارسال DNS به پراکسی بالادستی جهت عبور از مسمومیت
+    rules.add({
+      "type": "field",
+      "port": 53,
+      "outboundTag": outboundTag
+    });
+
     if (_bypassIran) {
       rules.addAll([
         {
@@ -1284,7 +1281,6 @@ class _HomePageState extends State<HomePage> {
       ]);
     }
 
-    // ۲. هدایت ۱۰۰٪ سایر ترافیک‌ها به ساکس تور یا اَتر
     rules.add({
       "type": "field",
       "network": "tcp,udp",
@@ -1293,6 +1289,10 @@ class _HomePageState extends State<HomePage> {
 
     final Map<String, dynamic> bridgeConfig = {
       "log": {"loglevel": "none"},
+      "dns": {
+        "servers": ["1.1.1.1", "8.8.8.8", "localhost"],
+        "queryStrategy": "UseIP"
+      },
       "inbounds": [
         {
           "tag": "socks-in",
@@ -1317,6 +1317,11 @@ class _HomePageState extends State<HomePage> {
                 "port": socksPort
               }
             ]
+          },
+          "streamSettings": {
+            "sockopt": {
+              "tcpKeepAliveInterval": 15
+            }
           }
         },
         {
@@ -1339,9 +1344,6 @@ class _HomePageState extends State<HomePage> {
     return jsonEncode(bridgeConfig);
   }
 
-  // =========================================================================
-  // اتصال هسته تور (Tor Engine)
-  // =========================================================================
   Future<void> _connectTor() async {
     if (_isTransitioning) return;
 
@@ -1502,6 +1504,7 @@ class _HomePageState extends State<HomePage> {
         );
 
         await _saveEngineState(ActiveEngine.tor);
+        _startHeartbeat();
 
         if (mounted) {
           setState(() {
@@ -1532,9 +1535,6 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // =========================================================================
-  // اتصال هسته اَتر (Aether Engine) با استثنا کردن سوکت‌های محلی
-  // =========================================================================
   Future<void> _connectAether() async {
     if (_isTransitioning) return;
 
@@ -1587,6 +1587,7 @@ class _HomePageState extends State<HomePage> {
         );
 
         await _saveEngineState(ActiveEngine.aether);
+        _startHeartbeat();
 
         if (mounted) {
           setState(() {
@@ -1615,9 +1616,6 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // =========================================================================
-  // اتصال هسته داشبورد (V2Ray Cloudflare)
-  // =========================================================================
   void _connectDashboard() async {
     if (_isTransitioning) return;
 
@@ -1700,6 +1698,7 @@ class _HomePageState extends State<HomePage> {
       );
 
       await _saveEngineState(ActiveEngine.dashboard);
+      _startHeartbeat();
 
       if (mounted) {
         setState(() {
@@ -1722,6 +1721,7 @@ class _HomePageState extends State<HomePage> {
       _isTransitioning = true;
     });
 
+    _stopHeartbeat();
     final int currentDownload = v2rayStatus.value.download;
     final int currentUpload = v2rayStatus.value.upload;
 
@@ -1765,7 +1765,6 @@ class _HomePageState extends State<HomePage> {
       try {
         final V2RayURL v2rayURL = V2ray.parseFromURL(configText);
         v2rayURL.inbound['port'] = 10808;
-        v2rayURL.dns = {"servers": _activeVerifiedDnsList};
         configText = v2rayURL.getFullConfiguration();
         _remark = v2rayURL.remark;
         if (updateUI && mounted) {
@@ -1797,7 +1796,7 @@ class _HomePageState extends State<HomePage> {
     try {
       final Map<String, dynamic> configMap = jsonDecode(configText);
       
-      // تضمین وجود پورت استاندارد SOCKS5 لوکال روی 127.0.0.1:10808 با UDP جهت استعلام دقیق آی‌پی
+      // پورت لوکال ساکس ۵ با UDP فعال
       configMap['inbounds'] = [
         {
           "tag": "socks-in",
@@ -1815,13 +1814,16 @@ class _HomePageState extends State<HomePage> {
         }
       ];
 
+      // دی‌ان‌اس ضدسانسور
       configMap['dns'] = {
-        "servers": [..._activeVerifiedDnsList, "localhost"],
+        "servers": ["1.1.1.1", "8.8.8.8", "localhost"],
         "queryStrategy": "UseIP"
       };
 
+      // روتینگ مستقیم و روتینگ DNS به تونل پروکسی
       final List<Map<String, dynamic>> routingRules = [
-        {"type": "field", "port": 53, "outboundTag": "dns"}
+        // هدایت ترافیک دی‌ان‌اس به پروکسی جهت ممانعت از جعل و مسمومیت
+        {"type": "field", "port": 53, "outboundTag": "proxy"}
       ];
 
       if (_bypassIran) {
@@ -1863,21 +1865,32 @@ class _HomePageState extends State<HomePage> {
         "rules": routingRules
       };
 
+      List<dynamic> outbounds = [];
       if (configMap.containsKey('outbounds') && configMap['outbounds'] is List) {
-        final List<dynamic> outbounds = configMap['outbounds'];
-        for (var outbound in outbounds) {
-          if (outbound is Map<String, dynamic> && outbound.containsKey('streamSettings')) {
-            final dynamic streamSettings = outbound['streamSettings'];
-            if (streamSettings is Map<String, dynamic> && streamSettings.containsKey('tlsSettings')) {
+        outbounds = configMap['outbounds'];
+      }
+
+      for (var outbound in outbounds) {
+        if (outbound is Map<String, dynamic>) {
+          if (!outbound.containsKey('streamSettings') || outbound['streamSettings'] == null) {
+            outbound['streamSettings'] = {};
+          }
+          final dynamic streamSettings = outbound['streamSettings'];
+          if (streamSettings is Map<String, dynamic>) {
+            if (streamSettings.containsKey('tlsSettings')) {
               final dynamic tlsSettings = streamSettings['tlsSettings'];
               if (tlsSettings is Map<String, dynamic>) {
                 tlsSettings.remove('allowInsecure');
               }
             }
+            streamSettings['sockopt'] = {
+              "tcpKeepAliveInterval": 15
+            };
           }
         }
       }
 
+      configMap['outbounds'] = outbounds;
       _fullConfigJson = jsonEncode(configMap);
     } catch (_) {}
   }
@@ -2273,9 +2286,6 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // =========================================================================
-  // ویجت هوشمند نمایش وضعیت، آی‌پی، نام کشور، پرچم و پینگ واقعی
-  // =========================================================================
   Widget _buildConnectionTelemetryCard(bool isConnected) {
     if (!isConnected) return const SizedBox.shrink();
 
@@ -2628,7 +2638,6 @@ class _HomePageState extends State<HomePage> {
                 ),
               ),
 
-              // نمایش کارت تلمتری و پرچم کشور در صورت اتصال
               _buildConnectionTelemetryCard(isConnected),
               
               const SizedBox(height: 15),
@@ -2826,7 +2835,6 @@ class _HomePageState extends State<HomePage> {
                 ),
               ),
 
-              // نمایش کارت تلمتری و پرچم کشور در صورت اتصال
               _buildConnectionTelemetryCard(isConnected),
 
               const SizedBox(height: 15),
@@ -3071,7 +3079,6 @@ class _HomePageState extends State<HomePage> {
                 ),
               ),
 
-              // نمایش کارت تلمتری و پرچم کشور در صورت اتصال
               _buildConnectionTelemetryCard(isConnected),
 
               const SizedBox(height: 15),
@@ -3369,7 +3376,6 @@ class _HomePageState extends State<HomePage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // ۱. کارت بایپس ایران (Split Tunneling)
           Card(
             color: Theme.of(context).colorScheme.surface,
             shape: RoundedRectangleBorder(
@@ -3427,7 +3433,6 @@ class _HomePageState extends State<HomePage> {
           ),
           const SizedBox(height: 15),
 
-          // ۲. کارت لاگ‌ها و عیب‌یابی زنده
           Card(
             color: Theme.of(context).colorScheme.surface,
             shape: RoundedRectangleBorder(
@@ -3499,7 +3504,6 @@ class _HomePageState extends State<HomePage> {
           ),
           const SizedBox(height: 15),
 
-          // ۳. کارت بهینه‌سازی باتری
           Card(
             color: Theme.of(context).colorScheme.surface,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
@@ -3552,7 +3556,6 @@ class _HomePageState extends State<HomePage> {
           ),
           const SizedBox(height: 15),
 
-          // ۴. کارت زبان و تم
           Card(
             color: Theme.of(context).colorScheme.surface,
             child: Padding(
@@ -3755,9 +3758,6 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-// =========================================================================
-// صفحه اختصاصی و حرفه‌ای نمایش و مدیریت لاگ‌ها (LogsScreen)
-// =========================================================================
 class LogsScreen extends StatefulWidget {
   final String currentLang;
   final MethodChannel torChannel;

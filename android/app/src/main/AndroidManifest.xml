@@ -1,22 +1,28 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
     
-    <!-- دسترسی‌های اینترنت و مانیتورینگ شبکه -->
+    <!-- دسترسی‌های اینترنت، سوکت‌ها و مانیتورینگ وضعیت شبکه -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     
-    <!-- دسترسی‌های سرویس پیش‌زمینه و نوتیفیکیشن متناسب با اندروید ۱۳، ۱۴ و ۱۵ -->
+    <!-- دسترسی‌های پایداری در پس‌زمینه، قفل پردازنده و ممانعت از به خواب رفتن پروسس‌ها -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    
+    <!-- دسترسی‌های سرویس‌های پیش‌زمینه و نوتیفیکیشن متناسب با اندروید ۱۳، ۱۴ و ۱۵ -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- 
         تنظیمات تگ application:
-        ۱. android:extractNativeLibs="true" برای استخراج و اجرای مستقیم باینری‌های کامپایل شده Rust (Aether) و Go (V2Ray).
-        ۲. android:usesCleartextTraffic="true" برای اجازه تبادل داده با پورت لوکال ساکس ۵ (127.0.0.1:1819).
-        ۳. android:enableOnBackInvokedCallback="true" برای ژست‌های حرکتی بازگشت اندروید ۱۴+.
+        ۱. android:label="RedCloud VPN" برای نام رسمی و صحیح برنامه در گوشی
+        ۲. android:extractNativeLibs="true" جهت استخراج و اجازه اجرای مستقیم باینری‌های لوکال (Aether و Tor)
+        ۳. android:usesCleartextTraffic="true" برای تبادل داده با پورت‌های محلی ساکس ۵ (127.0.0.1)
+        ۴. android:enableOnBackInvokedCallback="true" برای انیمیشن‌های بازگشت در اندروید ۱۴+
     -->
     <application
         android:label="RedCloud VPN"
@@ -26,6 +32,11 @@
         android:usesCleartextTraffic="true"
         android:enableOnBackInvokedCallback="true"
         tools:targetApi="34">
+
+        <!-- متادیتای توصیف سرویس پیش‌زمینه جهت ممانعت از توقف پروسس‌ها در اندروید ۱۴ و ۱۵ -->
+        <property
+            android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+            android:value="Continuous VPN and anti-censorship background tunnel protection" />
         
         <activity
             android:name=".MainActivity"
@@ -47,13 +58,22 @@
             </intent-filter>
         </activity>
 
+        <!-- ثبت سرویس دائمی ضد بسته شدن (Anti Task-Killer) برای پایداری تمام هسته‌ها -->
+        <service
+            android:name=".RedCloudCoreService"
+            android:enabled="true"
+            android:exported="false"
+            android:stopWithTask="false"
+            android:foregroundServiceType="specialUse|systemExempted"
+            tools:targetApi="34" />
+
         <!-- متادیتای مورد نیاز لایه موتور فلاتر -->
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
     </application>
     
-    <!-- دسترسی‌های سیستمی جهت باز کردن وب‌سایت، تلگرام و ایمیل پشتیبانی در اندروید ۱۱ به بالا -->
+    <!-- دسترسی‌های سیستمی جهت باز کردن لینک‌های تلگرام، وب‌سایت و ایمیل در اندروید ۱۱ به بالا -->
     <queries>
         <intent>
             <action android:name="android.intent.action.VIEW" />
