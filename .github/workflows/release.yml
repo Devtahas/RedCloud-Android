@@ -38,21 +38,24 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Download Official Tor GeoIP Databases
+      - name: Setup 32-bit and 64-bit Native Binaries
         run: |
-          mkdir -p assets/tor
-          echo "[*] Downloading official geoip database..."
-          curl -sL "https://gitlab.torproject.org/tpo/core/tor/-/raw/main/src/config/geoip" -o assets/tor/geoip
-          echo "[*] Downloading official geoip6 database..."
-          curl -sL "https://gitlab.torproject.org/tpo/core/tor/-/raw/main/src/config/geoip6" -o assets/tor/geoip6
-          ls -lh assets/tor/
+          mkdir -p android/app/src/main/jniLibs/armeabi-v7a
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a
+          
+          echo "[*] Fetching 32-bit Aether binary..."
+          curl -sL "https://github.com/CluvexStudio/Aether/releases/latest/download/aether-android-armv7.tar.gz" -o aether-armv7.tar.gz || true
+          if [ -f aether-armv7.tar.gz ]; then
+            tar -xzf aether-armv7.tar.gz -C android/app/src/main/jniLibs/armeabi-v7a/ 2>/dev/null || true
+            [ -f android/app/src/main/jniLibs/armeabi-v7a/aether ] && mv android/app/src/main/jniLibs/armeabi-v7a/aether android/app/src/main/jniLibs/armeabi-v7a/libaether.so || true
+            rm -f aether-armv7.tar.gz
+          fi
 
-      - name: Verify Project Assets
-        run: |
-          echo "[*] Verifying assets files..."
-          ls -lh assets/
-          [ -f "assets/cloudflare_IPs.txt" ] && echo "cloudflare_IPs.txt OK" || echo "Warning: cloudflare_IPs.txt missing"
-          [ -f "assets/DNS.txt" ] && echo "DNS.txt OK" || echo "Warning: DNS.txt missing"
+          echo "[*] Fetching Tor GeoIP databases..."
+          mkdir -p assets/tor
+          curl -sL "https://gitlab.torproject.org/tpo/core/tor/-/raw/main/src/config/geoip" -o assets/tor/geoip
+          curl -sL "https://gitlab.torproject.org/tpo/core/tor/-/raw/main/src/config/geoip6" -o assets/tor/geoip6
+          ls -la android/app/src/main/jniLibs/
 
       - name: Install Flutter Dependencies
         run: flutter pub get
@@ -71,21 +74,14 @@ jobs:
           flutter build apk --release --split-per-abi --android-skip-build-dependency-validation
           VERSION_TAG="${{ steps.get_version.outputs.VERSION }}"
           
-          # کپی و نام‌گذاری دقیق فایل‌های تفکیک‌شده معماری
           [ -f build/app/outputs/flutter-apk/app-arm64-v8a-release.apk ] && cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk release_apks/RedCloud-${VERSION_TAG}-arm64-v8a.apk || true
           [ -f build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk ] && cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk release_apks/RedCloud-${VERSION_TAG}-armeabi-v7a.apk || true
-          [ -f build/app/outputs/flutter-apk/app-x86_64-release.apk ] && cp build/app/outputs/flutter-apk/app-x86_64-release.apk release_apks/RedCloud-${VERSION_TAG}-x86_64.apk || true
 
       - name: Generate Checksums
         run: |
           cd release_apks
           sha256sum *.apk > SHA256SUMS.txt
           cd ..
-
-      - name: Verify Release Artifacts
-        run: |
-          echo "[*] Final Generated Release Artifacts:"
-          ls -lh release_apks/
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -96,18 +92,18 @@ jobs:
             release_apks/*.apk
             release_apks/SHA256SUMS.txt
           body: |
-            ## 🛡️ انتشار نسخه جدید RedCloud VPN (${{ steps.get_version.outputs.VERSION }})
+            ## 🛡️ انتشار نسخه پایدار RedCloud VPN (${{ steps.get_version.outputs.VERSION }})
             
-            ### 📥 راهنمای انتخاب فایل مناسب برای دانلود:
-            * 📱 **RedCloud-${{ steps.get_version.outputs.VERSION }}-Universal.apk** : نسخه پیشنهادی و همه‌منظوره (قابل نصب روی ۱۰۰٪ تمامی گوشی‌ها).
-            * ⚡ **RedCloud-${{ steps.get_version.outputs.VERSION }}-arm64-v8a.apk** : نسخه مخصوص گوشی‌های مدرن ۶۴ بیتی (کم‌حجم‌تر و بهینه‌تر).
-            * 📦 **RedCloud-${{ steps.get_version.outputs.VERSION }}-armeabi-v7a.apk** : نسخه مخصوص گوشی‌های قدیمی‌تر ۳۲ بیتی.
+            ### 📥 راهنمای فایل‌های دانلود:
+            * 📱 **RedCloud-${{ steps.get_version.outputs.VERSION }}-Universal.apk** : نسخه پیشنهادی (سازگار با تمامی گوشی‌ها اعم از ۳۲ بیتی و ۶۴ بیتی).
+            * ⚡ **RedCloud-${{ steps.get_version.outputs.VERSION }}-arm64-v8a.apk** : مخصوص گوشی‌های مدرن ۶۴ بیتی.
+            * 📦 **RedCloud-${{ steps.get_version.outputs.VERSION }}-armeabi-v7a.apk** : مخصوص گوشی‌های قدیمی ۳۲ بیتی.
             
             ---
-            ### ✨ تغییرات این نسخه (Changelog):
-            * 🚀 رفع باگ آی‌پی و اصلاح اتصال در حالت داشبورد
-            * 🔋 حفظ پایداری ارتباط و جلوگیری از قطعی اتصال در پس‌زمینه (Background Stability)
-            * 🛡️ به‌روزرسانی هسته‌های ضدسانسور Aether و Tor over MASQUE
+            ### ✨ تغییرات نسخه جدید:
+            * 🚀 حل کامل مشکل باز شدن سایت‌ها و رفع بن‌بست DNS در حالت داشبورد
+            * 🔋 پایداری دائمی و جلوگیری از قطع شدن اتصال با بستن برنامه از تسک منیجر (دکمه مربع)
+            * 📱 پشتیبانی کامل از گوشی‌های ۳۲ بیتی برای تمام تب‌ها
             
             📢 **کانال اطلاع‌رسانی:** [@DevTaha_project](https://t.me/DevTaha_project)
           draft: false
