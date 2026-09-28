@@ -1,0 +1,13 @@
+device_id = "35a5971b-65f7-4029-9184-88cecb445c6e"
+access_token = "97183ac6-dfe6-49ac-b93b-5350b27ebfe2"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8240:8dbd:48b3:3069:6dc7"
+wg_private_key = "cJBskpFyP/cHU0QBCa5BiaFBpogENjomqhn5I8J7L30="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "KFCm"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.8"

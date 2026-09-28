@@ -1,0 +1,13 @@
+device_id = "97df7c8b-5c68-43a3-a9d7-3cf5dd9dbcf5"
+access_token = "a01c288e-420a-4d19-8d0e-4e3a0040f11b"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:816e:a39:874e:f7d3:264c"
+wg_private_key = "MKE63Wd5fIIhdisVxd0Hiplthp+qSPfHk98nwf9KOko="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "RiFI"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.3"

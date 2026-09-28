@@ -1,0 +1,13 @@
+device_id = "94e76fda-ee94-4fb5-822d-0e27827a4a63"
+access_token = "2a493c58-2941-4e9d-87d2-11194b3e05f9"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8463:1306:b0ae:fbf:85cb"
+wg_private_key = "ANcPCoVXgVVzCJpXhtq1jphoK9a/NQx1+FNaJ+rgGm4="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "viu0"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.4"

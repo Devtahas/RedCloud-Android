@@ -1,0 +1,13 @@
+device_id = "0d532c6b-0a93-4076-9258-75f29be27bdb"
+access_token = "38711d5b-cf7a-4adb-8fde-05d3b0c2ae88"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8729:b9b5:94e6:70af:41c2"
+wg_private_key = "+PZzZxCUqUYWn3jHtcDnN1oETeiwbGPd78wQOfCyp3U="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "BOdl"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.10"

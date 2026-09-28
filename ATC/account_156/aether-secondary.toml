@@ -1,0 +1,13 @@
+device_id = "706ad667-dbcc-4de0-be2f-b8740c7bfdb4"
+access_token = "796b7675-23c8-4556-9644-8bbab766a4c7"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8e87:257f:2626:3642:4b67"
+wg_private_key = "CPWxv3pxPNokk25Kf9bWgsejMqDHl2uG9emjj8ZV+14="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "MBRK"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.3"

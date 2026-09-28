@@ -1,0 +1,13 @@
+device_id = "74f9393f-3119-4aed-bff0-c012667eb05c"
+access_token = "2542d164-7c7d-415e-b782-0fdfb60c7eb0"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8724:8da4:3c02:37ed:85c4"
+wg_private_key = "YFxfcKexDJHqZ17znKiDIsKJTNEJEILLe0/SV4OTAWU="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "iBi+"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.10"

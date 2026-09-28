@@ -14,7 +14,7 @@
     <!-- دسترسی‌های سرویس‌های پیش‌زمینه و نوتیفیکیشن متناسب با اندروید ۱۳، ۱۴ و ۱۵ -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" />
+    <!-- دسترسی سرویس پیش‌زمینه مجاز -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- 
@@ -64,7 +64,7 @@
             android:enabled="true"
             android:exported="false"
             android:stopWithTask="false"
-            android:foregroundServiceType="specialUse|systemExempted"
+            android:foregroundServiceType="specialUse"
             tools:targetApi="34" />
 
         <!-- متادیتای مورد نیاز لایه موتور فلاتر -->

@@ -41,6 +41,15 @@ class MainActivity : FlutterActivity() {
         var aetherProcess: Process? = null
 
         @Volatile
+        var currentAetherMode: String = "none"
+
+        @Volatile
+        var currentAetherNoize: String = "none"
+
+        @Volatile
+        var psiphonProcess: Process? = null
+
+        @Volatile
         var torProcess: Process? = null
 
         @Volatile
@@ -153,6 +162,32 @@ class MainActivity : FlutterActivity() {
                     }
                 }
 
+                // متد هوشمند چندپروتکله برای حالت هیبریدی (Smart Hybrid Auto-Probing)
+                "startSmartAether" -> {
+                    val port = call.argument<Int>("port") ?: 1819
+                    thread {
+                        val outcome = startSmartAetherEngine(port)
+                        runOnUiThread {
+                            if (outcome != null) {
+                                acquireWakeLock()
+                                RedCloudCoreService.start(applicationContext)
+                                result.success(outcome)
+                            } else {
+                                result.error("SMART_FAILED", "هیچ‌کدام از پروتکل‌ها و نویزهای اَتر پاسخگو نبودند", null)
+                            }
+                        }
+                    }
+                }
+
+                "getAetherStatus" -> {
+                    val statusMap = mapOf(
+                        "isRunning" to (aetherProcess?.isAlive == true),
+                        "mode" to currentAetherMode,
+                        "noize" to currentAetherNoize
+                    )
+                    result.success(statusMap)
+                }
+
                 "stopAether" -> {
                     stopAetherEngine()
                     if (torProcess == null || torProcess?.isAlive == false) {
@@ -200,6 +235,10 @@ class MainActivity : FlutterActivity() {
                     val mode = call.argument<String>("mode")
                     thread {
                         try {
+                            getSharedPreferences("redcloud_atc_prefs", Context.MODE_PRIVATE)
+                                .edit().clear().apply()
+                            appendNativeLog("ATC", "حافظه استخر ATC پاک شد؛ در اتصال بعدی اکانت رندوم جدیدی برگزیده خواهد شد.")
+
                             if (mode != null) {
                                 val modeDir = File(filesDir, "identity_${mode.lowercase()}")
                                 if (modeDir.exists()) modeDir.deleteRecursively()
@@ -218,6 +257,17 @@ class MainActivity : FlutterActivity() {
                             runOnUiThread { result.error("RESET_ERR", e.message, null) }
                         }
                     }
+                }
+
+                "getAtcAccountInfo" -> {
+                    val prefs = getSharedPreferences("redcloud_atc_prefs", Context.MODE_PRIVATE)
+                    val account = prefs.getString("current_atc_account", "نامشخص") ?: "نامشخص"
+                    val timestamp = prefs.getLong("atc_assigned_timestamp", 0L)
+                    val remainingDays = if (timestamp > 0L) {
+                        val thirtyDays = 30L * 24 * 60 * 60 * 1000L
+                        ((thirtyDays - (System.currentTimeMillis() - timestamp)) / (24 * 60 * 60 * 1000L)).coerceAtLeast(0)
+                    } else 30L
+                    result.success(mapOf("account" to account, "remainingDays" to remainingDays))
                 }
 
                 "isIgnoringBatteryOptimizations" -> {
@@ -315,10 +365,47 @@ class MainActivity : FlutterActivity() {
                 "killAllCores" -> {
                     appendNativeLog("Lifecycle", "متوقف‌سازی تمامی هسته‌ها و آزادسازی کامل حافظه...")
                     stopTorEngine()
+                    stopPsiphonEngine()
                     stopAetherEngine()
                     releaseWakeLock()
                     RedCloudCoreService.stop(applicationContext)
                     result.success(true)
+                }
+
+                // هندلر اختصاصی اجرای شبکه سایفون (Psiphon Engine)
+                "startPsiphon" -> {
+                    val port = call.argument<Int>("port") ?: 9081
+                    val isHybrid = call.argument<Boolean>("isHybrid") ?: true
+                    val region = call.argument<String>("region") ?: "CA"
+
+                    thread {
+                        val launched = startPsiphonEngine(port, isHybrid, region)
+                        runOnUiThread {
+                            if (launched) {
+                                acquireWakeLock()
+                                RedCloudCoreService.start(applicationContext, "سایفون ($region) در پس‌زمینه فعال است")
+                                result.success(true)
+                            } else {
+                                result.error("PSIPHON_FAILED", "عدم امکان راه‌اندازی هسته سایفون", null)
+                            }
+                        }
+                    }
+                }
+
+                "stopPsiphon" -> {
+                    stopPsiphonEngine()
+                    releaseWakeLock()
+                    RedCloudCoreService.stop(applicationContext)
+                    result.success(true)
+                }
+
+                "checkPsiphonReady" -> {
+                    val port = call.argument<Int>("port") ?: 9081
+                    val timeoutMs = call.argument<Int>("timeoutMs") ?: 1200
+                    thread {
+                        val isReady = testSocksPort("Psiphon", port, timeoutMs)
+                        runOnUiThread { result.success(isReady) }
+                    }
                 }
 
                 "isIgnoringBatteryOptimizations" -> {
@@ -349,7 +436,7 @@ class MainActivity : FlutterActivity() {
         val nativeLib = File(nativeDir, "lib$binaryName.so")
 
         if (nativeLib.exists() && nativeLib.length() > 0L) {
-            nativeLib.setExecutable(true, false)
+            // فایل‌های موجود در nativeLibraryDir به صورت پیش‌فرض توسط اندروید دسترسی اجرایی دارند
             appendNativeLog("NativeLoader", "یافتن باینری در libDir: ${nativeLib.absolutePath} (${nativeLib.length()} bytes)")
             return nativeLib.absolutePath
         }
@@ -506,10 +593,15 @@ class MainActivity : FlutterActivity() {
         return try {
             val processBuilder = ProcessBuilder(command)
             processBuilder.directory(filesDir)
+            val psiphonBinPath = getExecutableBinaryPath("psiphon")
             val env = processBuilder.environment()
             env["HOME"] = filesDir.absolutePath
             env["TMPDIR"] = cacheDir.absolutePath
             env["LD_LIBRARY_PATH"] = "${applicationInfo.nativeLibraryDir}:/system/lib64:/system/lib"
+            if (psiphonBinPath != null) {
+                env["AETHER_PSIPHON_BIN"] = psiphonBinPath
+                appendNativeLog("PsiphonInit", "آدرس باینری سایفون ست شد: $psiphonBinPath")
+            }
             processBuilder.redirectErrorStream(true)
 
             val process = processBuilder.start()
@@ -573,6 +665,150 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    /**
+     * اجرای هوشمند و آزمایش ترتیبی ۵ پروتکل اصلی و نویزها تا برقراری پایدارترین گذردهی
+     */
+    private fun startSmartAetherEngine(port: Int): Map<String, Any>? {
+        appendNativeLog("AetherSmart", "آغاز پویش هوشمند پروتکل‌ها با نظارت فعال بر پورت‌ها...")
+
+        // اولویت‌بندی بهینه: شروع با مواردی که سریع‌ترین هندشیک را در شبکه ایران دارند
+        val candidateProfiles = listOf(
+            Pair("masque", "quic"),
+            Pair("masque_h2", "firewall"),
+            Pair("masque_h2", "gfw"),
+            Pair("wireguard", "gfw")
+        )
+
+        for ((mode, noize) in candidateProfiles) {
+            appendNativeLog("AetherSmart", "در حال آزمایش پروتکل: $mode با نویز: $noize...")
+            
+            // ۱. فعال‌سازی ناظر برای آزادسازی حتمی پورت قبل از تست
+            stopAetherEngine()
+            ensurePortFree(port, 2000)
+
+            val started = startAetherEngine(mode, port, noize, emptyList())
+            if (!started) {
+                appendNativeLog("AetherSmart", "خطا در استارت باینری $mode. پرش به پروتکل بعدی...")
+                continue
+            }
+
+            // ۲. مهلت کافی به اَتر برای پویش گیت‌وی کلودفلر (تا ۱۵ ثانیه، چک هر ۵۰۰ میلی‌ثانیه)
+            var portReady = false
+            for (attempt in 1..30) {
+                Thread.sleep(500)
+                if (testSocksPort("Aether-Probe", port, 700)) {
+                    portReady = true
+                    appendNativeLog("AetherSmart", "پورت $port توسط $mode در تلاش شماره $attempt با موفقیت باز شد!")
+                    break
+                }
+            }
+
+            if (!portReady) {
+                appendNativeLog("AetherSmart", "عدم پاسخگویی پورت برای $mode در زمان مقرر. تعویض...")
+                stopAetherEngine()
+                continue
+            }
+
+            // ۳. تست گذردهی واقعی ترافیک اینترنت
+            var egressPassed = false
+            for (egressAttempt in 1..4) {
+                Thread.sleep(400)
+                if (testHttpThroughSocks(port, 3000)) {
+                    egressPassed = true
+                    break
+                }
+            }
+
+            if (egressPassed) {
+                appendNativeLog("AetherSmart", " پروتکل طلایی برقرار شد: $mode (نویز: $noize) - آماده اتصال به کانفیگ!")
+                currentAetherMode = mode
+                currentAetherNoize = noize
+                return mapOf(
+                    "success" to true,
+                    "mode" to mode,
+                    "noize" to noize
+                )
+            } else {
+                appendNativeLog("AetherSmart", "پورت باز شد اما تست پکت $mode ناموفق بود. سوئیچ به پروتکل بعدی...")
+                stopAetherEngine()
+            }
+        }
+
+        appendNativeLog("AetherSmartError", "هیچ‌کدام از پروتکل‌ها تایید نهایی نشدند.")
+        return null
+    }
+
+    /**
+     * سیستم مدیریت هوشمند استخر کلیدهای ضدسانسور (ATC Pool)
+     * انتخاب تصادفی یک اکانت از ۱۹۳ اکانت آماده، ذخیره ۳۰ روزه و کپی فایل‌های TOML به دایرکتوری Aether
+     */
+    private fun deployAtcAccount(targetDir: File, forceRotate: Boolean = false): String {
+        val prefs = getSharedPreferences("redcloud_atc_prefs", Context.MODE_PRIVATE)
+        var currentAccount = prefs.getString("current_atc_account", null)
+        val assignedTime = prefs.getLong("atc_assigned_timestamp", 0L)
+        val now = System.currentTimeMillis()
+        val thirtyDaysMillis = 30L * 24 * 60 * 60 * 1000L
+
+        val isExpired = (now - assignedTime) >= thirtyDaysMillis
+        val hasExistingConfigs = targetDir.exists() && (targetDir.listFiles()?.any {
+            (it.name.startsWith("aether") || it.name.endsWith(".toml")) && it.length() > 0L
+        } == true)
+
+        val needNewAccount = forceRotate || isExpired || currentAccount == null || !hasExistingConfigs
+
+        if (needNewAccount) {
+            try {
+                val atcFolders = assets.list("ATC")?.filter { it.startsWith("account_") } ?: emptyList()
+                if (atcFolders.isNotEmpty()) {
+                    val pool = if (atcFolders.size > 1 && currentAccount != null) {
+                        atcFolders.filter { it != currentAccount }
+                    } else {
+                        atcFolders
+                    }
+                    currentAccount = pool.random()
+
+                    prefs.edit()
+                        .putString("current_atc_account", currentAccount)
+                        .putLong("atc_assigned_timestamp", now)
+                        .apply()
+
+                    appendNativeLog("ATC", "اکانت جدید از استخر کلیدها انتخاب شد: $currentAccount (چرخه ۳۰ روزه فعال شد)")
+                } else {
+                    appendNativeLog("ATC", "هشدار: پوشه assets/ATC خالی است یا به درستی منتقل نشده است.")
+                }
+            } catch (e: Exception) {
+                appendNativeLog("ATCError", "خطا در خواندن پوشه ATC: ${e.message}")
+            }
+        } else {
+            val remainingDays = ((thirtyDaysMillis - (now - assignedTime)) / (24 * 60 * 60 * 1000L)).coerceAtLeast(0)
+            appendNativeLog("ATC", "استفاده از اکانت فعال: $currentAccount ($remainingDays روز تا چرخش بعدی)")
+        }
+
+        if (currentAccount != null) {
+            try {
+                if (!targetDir.exists()) targetDir.mkdirs()
+                val files = assets.list("ATC/$currentAccount") ?: emptyArray()
+                for (fileName in files) {
+                    val destFile = File(targetDir, fileName)
+                    if (needNewAccount || !destFile.exists() || destFile.length() == 0L) {
+                        assets.open("ATC/$currentAccount/$fileName").use { input ->
+                            FileOutputStream(destFile).use { output -> input.copyTo(output) }
+                        }
+                        // ایجاد نسخه با پسوند .toml برای اطمینان ۱۰۰٪ از شناسایی توسط تمام باینری‌ها
+                        if (!fileName.endsWith(".toml")) {
+                            val tomlFile = File(targetDir, "$fileName.toml")
+                            destFile.copyTo(tomlFile, overwrite = true)
+                        }
+                        appendNativeLog("ATC", "تزریق فایل $fileName از $currentAccount به محیط اجرایی اَتر انجام شد.")
+                    }
+                }
+            } catch (e: Exception) {
+                appendNativeLog("ATCError", "خطا در استخراج فایل‌های اکانت $currentAccount: ${e.message}")
+            }
+        }
+        return currentAccount ?: "unknown"
+    }
+
     private fun startAetherEngine(mode: String, port: Int, customNoize: String?, extraArgs: List<String>): Boolean {
         stopAetherEngine()
 
@@ -587,11 +823,15 @@ class MainActivity : FlutterActivity() {
             modeDir.mkdirs()
         }
 
+        // تزریق خودکار هویت ۳۰ روزه از استخر کلیدهای ATC پیش از اجرای پروسس
+        deployAtcAccount(modeDir)
+
         try {
+            // فقط فایل‌های قفل و کش‌های موقت پاک شوند، اما اکانت ذخیره‌شده حفظ شود تا کلودفلر ارور لیمیت ۳۰ ثانیه ندهد
             modeDir.listFiles()?.forEach { file ->
-                if (file.name.endsWith(".toml") || file.name.contains("cache") || file.name.contains("endpoint")) {
+                if (file.name.contains("lastconn") || file.name.contains("lock") || file.name.contains("cache")) {
                     file.delete()
-                    appendNativeLog("AetherClean", "کَش قدیمی اندپوینت حذف شد: ${file.name}")
+                    appendNativeLog("AetherClean", "کَش و قفل قدیمی حذف شد: ${file.name}")
                 }
             }
         } catch (_: Exception) {}
@@ -638,6 +878,13 @@ class MainActivity : FlutterActivity() {
                 command.add("25")
                 command.add("--turbo")
             }
+            "masque_in_masque", "masque_nested" -> {
+                command.add("--masque")
+                command.add("--gool")
+                command.add("--noize")
+                command.add(customNoize ?: "quic")
+                command.add("--turbo")
+            }
             else -> {
                 command.add("--h2")
                 command.add("--fragment")
@@ -653,15 +900,22 @@ class MainActivity : FlutterActivity() {
         return try {
             val processBuilder = ProcessBuilder(command)
             processBuilder.directory(modeDir)
+            val psiphonBinPath = getExecutableBinaryPath("psiphon")
             val env = processBuilder.environment()
             env["HOME"] = filesDir.absolutePath
             env["TMPDIR"] = cacheDir.absolutePath
             env["LD_LIBRARY_PATH"] = "${applicationInfo.nativeLibraryDir}:/system/lib64:/system/lib"
+            if (psiphonBinPath != null) {
+                env["AETHER_PSIPHON_BIN"] = psiphonBinPath
+                appendNativeLog("PsiphonInit", "آدرس باینری سایفون ست شد: $psiphonBinPath")
+            }
             processBuilder.redirectErrorStream(true)
 
             val process = processBuilder.start()
             aetherProcess = process
-            appendNativeLog("AetherProcess", "پروسس اَتر شروع شد.")
+            currentAetherMode = normalizedMode
+            currentAetherNoize = customNoize ?: "default"
+            appendNativeLog("AetherProcess", "پروسس اَتر شروع شد ($normalizedMode).")
 
             thread(isDaemon = true) {
                 try {
@@ -702,7 +956,35 @@ class MainActivity : FlutterActivity() {
             appendNativeLog("AetherStopError", "خطا در توقف اَتر: ${e.message}")
         } finally {
             aetherProcess = null
+            currentAetherMode = "none"
+            currentAetherNoize = "none"
         }
+    }
+
+    /**
+     * ناظر پورت: بررسی و آزادسازی تضمینی پورت قبل از اتصال هر هسته
+     */
+    private fun ensurePortFree(port: Int, maxWaitMs: Long = 2500): Boolean {
+        appendNativeLog("PortOverseer", "ناظر پورت: در حال بررسی و پاک‌سازی وضعیت پورت $port...")
+        val startTime = System.currentTimeMillis()
+        while (System.currentTimeMillis() - startTime < maxWaitMs) {
+            try {
+                java.net.ServerSocket().use { serverSocket ->
+                    serverSocket.reuseAddress = true
+                    serverSocket.bind(InetSocketAddress("127.0.0.1", port))
+                    // پورت کاملاً آزاد و آماده اتصال است
+                    appendNativeLog("PortOverseer", "پورت $port کاملاً آزاد و آماده سرویس‌دهی است.")
+                    return true
+                }
+            } catch (e: Exception) {
+                // پورت هنوز اشغال است، تلاش برای کشتن پروسه‌های معلق
+                appendNativeLog("PortOverseer", "پورت $port در اشغال است؛ در حال تخلیه سوکت...")
+                stopAetherEngine()
+                Thread.sleep(300)
+            }
+        }
+        appendNativeLog("PortOverseer", "هشدار: پورت $port پس از انتظار همچنان توسط سیستم رها نشد.")
+        return false
     }
 
     private fun testSocksPort(engineName: String, port: Int, timeoutMs: Int): Boolean {
@@ -718,6 +1000,113 @@ class MainActivity : FlutterActivity() {
             val elapsed = System.currentTimeMillis() - start
             appendNativeLog("Probe", "$engineName پورت $port هنوز آماده نیست (${elapsed}ms)")
             false
+        }
+    }
+
+    private fun startPsiphonEngine(port: Int, isHybrid: Boolean, region: String): Boolean {
+        stopPsiphonEngine()
+        ensurePortFree(port, 2000)
+
+        val psiphonBinary = getExecutableBinaryPath("psiphon") ?: run {
+            appendNativeLog("PsiphonError", "باینری رسمی libpsiphon.so یافت نشد.")
+            return false
+        }
+
+        val psiphonDir = File(filesDir, "psiphon_data")
+        if (!psiphonDir.exists()) psiphonDir.mkdirs()
+        psiphonDir.setReadable(true, false)
+        psiphonDir.setWritable(true, false)
+        psiphonDir.setExecutable(true, false)
+
+        val configFile = File(psiphonDir, "psiphon.config")
+        val egressCode = if (region.isEmpty() || region.uppercase() == "AUTO") "CA" else region.uppercase()
+
+        // کانفیگ کامل و رسمی سایفون همراه با کلید اعتبارسنجی سرورهای کانادا و اتصال به اَتر
+        val configJson = JSONObject().apply {
+            put("DataRootDirectory", psiphonDir.absolutePath)
+            put("LocalSocksProxyPort", port)
+            put("LocalHttpProxyPort", port + 1)
+            put("EgressRegion", egressCode)
+            put("PropagationChannelId", "FFFFFFFFFFFFFFFF")
+            put("SponsorId", "FFFFFFFFFFFFFFFF")
+            put("RemoteServerListDownloadFilename", "remote_server_list")
+            put("RemoteServerListUrl", "https://s3.amazonaws.com//psiphon/web/mjr4-p23r-puwl/server_list_compressed")
+            put("RemoteServerListSignaturePublicKey", "MIICIDANBgkqhkiG9w0BAQEFAAOCAg0AMIICCAKCAgEAt7Ls+/39r+T6zNW7GiVpJfzq/xvL9SBH5rIFnk0RXYEYavax3WS6HOD35eTAqn8AniOwiH+DOkvgSKF2caqk/y1dfq47Pdymtwzp9ikpB1C5OfAysXzBiwVJlCdajBKvBZDerV1cMvRzCKvKwRmvDmHgphQQ7WfXIGbRbmmk6opMBh3roE42KcotLFtqp0RRwLtcBRNtCdsrVsjiI1Lqz/lH+T61sGjSjQ3CHMuZYSQJZo/KrvzgQXpkaCTdbObxHqb6/+i1qaVOfEsvjoiyzTxJADvSytVtcTjijhPEV6XskJVHE1Zgl+7rATr/pDQkw6DPCNBS1+Y6fy7GstZALQXwEDN/qhQI9kWkHijT8ns+i1vGg00Mk/6J75arLhqcodWsdeG/M/moWgqQAnlZAGVtJI1OgeF5fsPpXu4kctOfuZlGjVZXQNW34aOzm8r8S0eVZitPlbhcPiR4gT/aSMz/wd8lZlzZYsje/Jr8u/YtlwjjreZrGRmG8KMOzukV3lLmMppXFMvl4bxv6YFEmIuTsOhbLTwFgh7KYNjodLj/LsqRVfwz31PgWQFTEPICV7GCvgVlPRxnofqKSjgTWI4mxDhBpVcATvaoBl1L/6WLbFvBsoAUBItWwctO2xalKxF5szhGm8lccoc5MZr8kfE0uxMgsxz4er68iCID+rsCAQM=")
+            put("UseIndistinguishableTLS", true)
+            if (isHybrid) {
+                put("UpstreamProxyUrl", "socks5://127.0.0.1:1819")
+            }
+            put("EstablishTunnelTimeoutSeconds", 60)
+        }
+        configFile.writeText(configJson.toString(2))
+        appendNativeLog("PsiphonConfig", "کانفیگ سایفون ثبت شد: منطقه خروجی: $egressCode | Upstream: ${if (isHybrid) "127.0.0.1:1819" else "Direct"}")
+
+        val caPath = if (File("/apex/com.android.conscrypt/cacerts").exists()) {
+            "/apex/com.android.conscrypt/cacerts"
+        } else {
+            "/system/etc/security/cacerts"
+        }
+
+        val command = listOf(psiphonBinary, "-config", configFile.absolutePath)
+
+        return try {
+            val processBuilder = ProcessBuilder(command)
+            processBuilder.directory(psiphonDir)
+            val env = processBuilder.environment()
+            env["HOME"] = filesDir.absolutePath
+            env["TMPDIR"] = cacheDir.absolutePath
+            env["LD_LIBRARY_PATH"] = "${applicationInfo.nativeLibraryDir}:/system/lib64:/system/lib"
+            env["SSL_CERT_DIR"] = caPath
+            processBuilder.redirectErrorStream(true)
+
+            val process = processBuilder.start()
+            psiphonProcess = process
+            appendNativeLog("PsiphonProcess", "هسته رسمی سایفون آغاز به کار کرد.")
+
+            thread(isDaemon = true) {
+                try {
+                    val reader = BufferedReader(InputStreamReader(process.inputStream))
+                    var line: String?
+                    while (reader.readLine().also { line = it } != null) {
+                        line?.let { appendNativeLog("PsiphonCore", it) }
+                    }
+                } catch (_: Exception) {}
+            }
+
+            // ناظر هوشمند: پایش باز شدن پورت ۹۰۸۱
+            for (step in 1..40) {
+                Thread.sleep(500)
+                if (testSocksPort("Psiphon-Probe", port, 400)) {
+                    appendNativeLog("PsiphonSmart", " پورت سایفون $port با موفقیت باز شد و آماده ترافیک است!")
+                    return true
+                }
+            }
+
+            appendNativeLog("PsiphonError", "تایم‌اوت پورت سایفون.")
+            stopPsiphonEngine()
+            false
+        } catch (e: Exception) {
+            appendNativeLog("PsiphonError", "خطا در استارت سایفون: ${e.message}")
+            false
+        }
+    }
+
+    private fun stopPsiphonEngine() {
+        try {
+            psiphonProcess?.let { process ->
+                if (process.isAlive) {
+                    appendNativeLog("PsiphonLifecycle", "توقف هسته سایفون...")
+                    process.destroy()
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        process.destroyForcibly()
+                        process.waitFor(400, TimeUnit.MILLISECONDS)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            appendNativeLog("PsiphonStopError", "خطا در توقف سایفون: ${e.message}")
+        } finally {
+            psiphonProcess = null
         }
     }
 

@@ -1,0 +1,13 @@
+device_id = "7f8f7cf4-fb3e-4d03-b44c-dcba974fd297"
+access_token = "27216273-ac8a-4479-8b7c-39c600940dfd"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:854d:c81:2916:a0f1:3c8"
+wg_private_key = "kIVu5eqEc1jhCszYVdKtYq1VOrXZTKXTOO+gJxn0UnQ="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "Bly3"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.9"

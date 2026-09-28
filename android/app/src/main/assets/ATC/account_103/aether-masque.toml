@@ -1,0 +1,27 @@
+device_id = "4d1ff0b4-8af3-4298-8385-4db358758e1a"
+access_token = "cd4d2432-2444-47e5-80ad-ad547deda6cc"
+cert_pem = """
+-----BEGIN CERTIFICATE-----
+MIHsMIGToAMCAQICAQAwCgYIKoZIzj0EAwIwADAeFw0yNjA5MjgxMTMwMjJaFw0y
+NzA5MjgxMTMwMjJaMAAwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAS0AqZTYWR1
+h/hJD5O9jh5MaQWJeYrGBSa5DdLp0lC+pcUMK1drsYlrsoQhmbuZtT377KSSW2pG
+CvlKXran3+Q3MAoGCCqGSM49BAMCA0gAMEUCIQCSDuXxSWY7Fbec4fnbM5mSWg/s
+qsWvQ0eYFpnk/3KNxAIgbOGEeJ/BB8A9dO+h22HvPNe+EL5Fi4Alyw3pIKxH/1I=
+-----END CERTIFICATE-----
+"""
+key_pem = """
+-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgq8b8BFBOuflkNkFu
+0Q2Qkj8ouUdOR1tJp67sY968pRmhRANCAAS0AqZTYWR1h/hJD5O9jh5MaQWJeYrG
+BSa5DdLp0lC+pcUMK1drsYlrsoQhmbuZtT377KSSW2pGCvlKXran3+Q3
+-----END PRIVATE KEY-----
+"""
+cert_issued_at = 1790595024
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8e7e:d884:3297:2a47:8d70"
+wg_private_key = "GNw34953ORVKJUEGSkFNvsY2bV/Q3K/uh5S8OrjStX8="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "hCMM"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.9"

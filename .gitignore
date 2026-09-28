@@ -88,3 +88,9 @@ Thumbs.db
 !assets/bin/**
 !android/app/src/main/jniLibs/**
 !android/gradle/wrapper/gradle-wrapper.jar
+
+# استخر کلیدهای آفلاین ATC
+!ATC/
+!ATC/**
+!android/app/src/main/assets/ATC/
+!android/app/src/main/assets/ATC/**

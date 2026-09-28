@@ -1,0 +1,13 @@
+device_id = "aca5ddbc-f932-443b-9691-ec14026859f3"
+access_token = "4ad9e243-9402-49db-9c1b-8e434837362b"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8cd1:79b3:63d1:4c:7281"
+wg_private_key = "GDgx+vOAO4lQbvvxZTRkDAtVeralB33TpKZ+gOn54Es="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "CCht"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.5"

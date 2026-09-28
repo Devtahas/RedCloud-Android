@@ -1,0 +1,13 @@
+device_id = "9092cb90-6908-4c11-ba37-d80d78916087"
+access_token = "90f96245-3d95-42fa-ac1f-ee83b5e060d8"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:82ff:fb93:1536:c650:a9be"
+wg_private_key = "CK8fU0PCrkvYLm7LQijyP7vzfpcK+Z08Wy4WahEKQGI="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "Knhe"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.2"

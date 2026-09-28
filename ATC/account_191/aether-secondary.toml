@@ -1,0 +1,13 @@
+device_id = "fdc63b65-bad4-435d-b6d1-2b51868cecc5"
+access_token = "27b01cf4-f4b0-43f7-a4b6-d4a811fd6b5d"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:838b:e4b2:6850:4703:c726"
+wg_private_key = "CB+EiTwIfWkgyGMAvcsLrZVgQrBeR6QYUotBD9+KhXo="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "Bhgi"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.9"

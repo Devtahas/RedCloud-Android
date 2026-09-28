@@ -1,0 +1,13 @@
+device_id = "bbd2f1f2-015a-4d6c-8378-1a13dcdc6a48"
+access_token = "8a243510-32a5-4dc0-b2b4-b288ce30fcf1"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:864d:8ef:515f:325:db1a"
+wg_private_key = "WOy/jeBLrk7LTy8fXqDES9KvbHrMYSJGNnCTQmwUqHQ="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "Mbay"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.9"

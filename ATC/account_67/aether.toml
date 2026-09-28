@@ -1,0 +1,13 @@
+device_id = "56886afe-1cd8-4a9d-8ff5-ed875df63282"
+access_token = "6eb7806f-58eb-4ee9-b9a8-e393c02e75a3"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8814:9cb:80f1:9f6b:ea98"
+wg_private_key = "2Hndvd3dFT+fuAnMHqR3DmInYYzuiUGhp6OLdje8x28="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "KU/x"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.3"

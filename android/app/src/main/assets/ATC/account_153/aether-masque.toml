@@ -1,0 +1,27 @@
+device_id = "3ae61c4f-e29e-4de6-9f90-c95449d35859"
+access_token = "1eb11cfc-c3d8-4136-8482-9a4b498ece45"
+cert_pem = """
+-----BEGIN CERTIFICATE-----
+MIHtMIGToAMCAQICAQAwCgYIKoZIzj0EAwIwADAeFw0yNjA5MjgxMjA5MDRaFw0y
+NzA5MjgxMjA5MDRaMAAwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAATdOryRiqxX
+pGGn9k3wyGG8xTVbFcSb0wP4LP0J2KOO6n3UWPbMhuMn7x+Eks92B0dX+PaA4MHl
+CyNBGDJil1teMAoGCCqGSM49BAMCA0kAMEYCIQDewc1wRn10sAsxzKDqMPy/zuTy
+ezMUy6C/M55sMC4GsQIhAPt9o/ZmW3s5nAbam5jZ57Ktpoat3YQ1PoZD59JSTZKg
+-----END CERTIFICATE-----
+"""
+key_pem = """
+-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgGGiOplwH3kxYzcyf
+ZGrlMjl6Slj47HP6RsA2ExESCCKhRANCAATdOryRiqxXpGGn9k3wyGG8xTVbFcSb
+0wP4LP0J2KOO6n3UWPbMhuMn7x+Eks92B0dX+PaA4MHlCyNBGDJil1te
+-----END PRIVATE KEY-----
+"""
+cert_issued_at = 1790597346
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:85f9:a180:82dd:401e:54ba"
+wg_private_key = "kO4nxz4jLR4eyoUuYck0B87i6Q5E+FOR5gDtjGNbamw="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "PTod"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.6"

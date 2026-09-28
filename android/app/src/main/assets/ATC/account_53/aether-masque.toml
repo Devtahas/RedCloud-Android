@@ -1,0 +1,27 @@
+device_id = "74bdf267-33a8-4d75-ae41-9f1034766d63"
+access_token = "33dbad3a-303a-4ff6-b975-fc08e512ce56"
+cert_pem = """
+-----BEGIN CERTIFICATE-----
+MIHrMIGToAMCAQICAQAwCgYIKoZIzj0EAwIwADAeFw0yNjA5MjgxMDI4MzZaFw0y
+NzA5MjgxMDI4MzZaMAAwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARYiRuYiD+4
+IjiRxMMF/lK1nKYpIEl0aBr2brmUZhqgdfgg+ScKFWJPuc2QuOU1WyYxqMrwy2so
+4QHM3SIg8qA1MAoGCCqGSM49BAMCA0cAMEQCIAsAv8VHUUC4sPNaOp3q/KTOZySW
+VrWUOjKUGFqP3YQDAiBMChQvpxzRUZSy+aMT9ac/H4z2vC/nlQmjhQXkgq1NhA==
+-----END CERTIFICATE-----
+"""
+key_pem = """
+-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgHHzqxBZJUMDtoy9h
+2MQIQW78pAB4l2KH+GvMR1ruZXShRANCAARYiRuYiD+4IjiRxMMF/lK1nKYpIEl0
+aBr2brmUZhqgdfgg+ScKFWJPuc2QuOU1WyYxqMrwy2so4QHM3SIg8qA1
+-----END PRIVATE KEY-----
+"""
+cert_issued_at = 1790591319
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:85d8:6424:a022:b4a7:a4d9"
+wg_private_key = "YAK0+OmH7w9139s4LsUU+MFkpzsdY73Ul9PE7i+e33k="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "SJCA"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.10"

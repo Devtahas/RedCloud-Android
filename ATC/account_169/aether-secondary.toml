@@ -1,0 +1,13 @@
+device_id = "96e98564-08ba-4b7d-846a-46bd0f4be315"
+access_token = "c9e138d3-5847-4c15-98ff-79b7ae6a989d"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:86f9:cec:bdd4:9295:f84"
+wg_private_key = "0B5/T6ICCf3NjG1a/GCp9RP28FGh/ZSs/Osqgw6g+0I="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "Tena"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.4"

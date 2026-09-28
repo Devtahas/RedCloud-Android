@@ -1,0 +1,13 @@
+device_id = "465f3096-939f-424f-bc30-b59988c25208"
+access_token = "9717d3f9-2a8f-4bc6-8cc1-d770d02fc61b"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:85e9:9965:2a11:caff:853a"
+wg_private_key = "QDA7Zg1uTYVq36txc+2ST/WyJtF+RXfBZ5ppWnA0XEw="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "0IOE"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.9"

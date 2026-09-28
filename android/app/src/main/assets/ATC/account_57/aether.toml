@@ -1,0 +1,13 @@
+device_id = "32795989-5098-4f11-8717-721d71b3df84"
+access_token = "3d477728-fd1e-4377-b3cf-39401ce579a3"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8591:b9dc:ee7d:8c9e:7ea0"
+wg_private_key = "mE+fqP62FBiICmD30RaUBeckXcn2PMYTnh3d6IxOzEs="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "CccL"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.3"

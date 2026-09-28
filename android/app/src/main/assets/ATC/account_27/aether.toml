@@ -1,0 +1,13 @@
+device_id = "df3b3119-e834-4679-a195-1f5c650081f7"
+access_token = "a1399f8a-09b6-4ec7-8b58-7960bf36fc63"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8bae:973e:5df:f767:f89f"
+wg_private_key = "eIK8UPGgSZHwhYeEPQTBk4Q7HBDU3yyfl7TLkJ+aZmI="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "LfpD"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.9"

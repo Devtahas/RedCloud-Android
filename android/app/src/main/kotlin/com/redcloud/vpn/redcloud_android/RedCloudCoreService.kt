@@ -17,12 +17,16 @@ class RedCloudCoreService : Service() {
     companion object {
         const val ACTION_START = "com.redcloud.vpn.START_CORE_SERVICE"
         const val ACTION_STOP = "com.redcloud.vpn.STOP_CORE_SERVICE"
+        const val EXTRA_STATUS_TEXT = "extra_status_text"
         private const val CHANNEL_ID = "redcloud_core_channel"
         private const val NOTIFICATION_ID = 9991
 
-        fun start(context: Context) {
+        fun start(context: Context, statusText: String? = null) {
             val intent = Intent(context, RedCloudCoreService::class.java).apply {
                 action = ACTION_START
+                if (statusText != null) {
+                    putExtra(EXTRA_STATUS_TEXT, statusText)
+                }
             }
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -54,6 +58,8 @@ class RedCloudCoreService : Service() {
         MainActivity.appendNativeLog("Service", "سرویس دائمی پس‌زمینه (RedCloudCoreService) فعال شد.")
     }
 
+    private var currentStatusText: String = "اتصال امن در پس‌زمینه فعال است"
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
             stopForeground(true)
@@ -61,8 +67,16 @@ class RedCloudCoreService : Service() {
             return START_NOT_STICKY
         }
 
-        val notification = buildForegroundNotification()
-        startForeground(NOTIFICATION_ID, notification)
+        intent?.getStringExtra(EXTRA_STATUS_TEXT)?.let {
+            currentStatusText = it
+        }
+
+        val notification = buildForegroundNotification(currentStatusText)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
 
         // فلگ START_STICKY مانع از مرگ پروسس توسط اندروید می‌شود
         return START_STICKY
@@ -100,7 +114,7 @@ class RedCloudCoreService : Service() {
         }
     }
 
-    private fun buildForegroundNotification(): Notification {
+    private fun buildForegroundNotification(statusText: String = currentStatusText): Notification {
         val pendingIntent = PendingIntent.getActivity(
             this,
             0,
@@ -112,7 +126,7 @@ class RedCloudCoreService : Service() {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("RedCloud VPN")
-            .setContentText("اتصال امن در پس‌زمینه فعال است")
+            .setContentText(statusText)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)

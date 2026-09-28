@@ -15,7 +15,7 @@ const String telegramChannelUrl = "https://t.me/DevTaha_project";
 const String usdtBnbAddress = "0xDeda28Aa73Ec089A77B3fC616E0011a8fce12900";
 const String appPackageName = "com.redcloud.vpn.redcloud_android";
 
-enum ActiveEngine { none, dashboard, aether, tor }
+enum ActiveEngine { none, dashboard, aether, tor, psiphon }
 
 class LogEntry {
   final DateTime time;
@@ -211,6 +211,8 @@ class _HomePageState extends State<HomePage> {
   ActiveEngine _activeEngine = ActiveEngine.none;
   bool _isTransitioning = false;
   bool _bypassIran = true;
+  bool _isHybridMode = false;
+  String _hybridStatusText = "";
 
   Timer? _logTimer;
   Timer? _reportTimer;
@@ -272,8 +274,35 @@ class _HomePageState extends State<HomePage> {
   String _selectedAetherMode = "auto";
   String _selectedTorMode = "aether_masque";
   int _torBootstrapProgress = 0;
+
+  String _atcAccountName = "";
+  int _atcRemainingDays = 30;
+
+  Future<void> _fetchAtcInfo() async {
+    try {
+      final dynamic info = await _aetherChannel.invokeMethod('getAtcAccountInfo');
+      if (info is Map && mounted) {
+        setState(() {
+          _atcAccountName = info['account']?.toString() ?? "";
+          _atcRemainingDays = (info['remainingDays'] as num?)?.toInt() ?? 30;
+        });
+      }
+    } catch (_) {}
+  }
   String _torStepStatus = "آماده اتصال";
   int _torCurrentStep = 0;
+
+  bool _isPsiphonHybrid = true;
+  String _selectedPsiphonCountry = "CA";
+  final List<Map<String, String>> _psiphonCountries = [
+    {"code": "CA", "name": "Canada 🇨🇦 (کانادا)"},
+    {"code": "DE", "name": "Germany 🇩🇪 (آلمان)"},
+    {"code": "US", "name": "United States 🇺🇸 (آمریکا)"},
+    {"code": "GB", "name": "United Kingdom 🇬🇧 (انگلیس)"},
+    {"code": "NL", "name": "Netherlands 🇳🇱 (هلند)"},
+    {"code": "FR", "name": "France 🇫🇷 (فرانسه)"},
+    {"code": "AUTO", "name": "Best Available (خودکار)"},
+  ];
 
   int _lastSentDownload = 0;
   int _lastSentUpload = 0;
@@ -335,6 +364,9 @@ class _HomePageState extends State<HomePage> {
       "server_updating_banner": "سرورها در حال آپدیت هستند. از شکیبایی شما متشکریم.",
       "limit_exhausted_banner": "مصرف روزانه اکانت به پایان رسید! در حال تعویض خودکار...",
       
+      "hybrid_mode_label": "هیبریدی (اتر + کانفیگ)",
+      "hybrid_starting": "در حال آزمایش و اتصال هوشمند موتور اَتر...",
+      "hybrid_failed": "خطا در اتصال اَتر هوشمند؛ پروتکل‌ها پاسخگو نبودند.",
       "banner_dns_rescue": "در حال رفع مسمومیت دی‌ان‌اس و گزینش امن‌ترین سرورها...",
       "banner_cf_fallback": "آی‌پی‌های پیش‌فرض پاسخگو نبودند؛ در حال استخراج و اسکن از دیتابیس بزرگ رنج‌های کلودفلر...",
 
@@ -546,6 +578,7 @@ class _HomePageState extends State<HomePage> {
         int targetPort = 10808;
         if (_activeEngine == ActiveEngine.aether) targetPort = 1819;
         if (_activeEngine == ActiveEngine.tor) targetPort = 9050;
+        if (_activeEngine == ActiveEngine.psiphon) targetPort = 9081;
 
         final socket = await Socket.connect('127.0.0.1', targetPort, timeout: const Duration(seconds: 2));
         socket.destroy();
@@ -655,6 +688,7 @@ class _HomePageState extends State<HomePage> {
     int targetSocksPort = 10808;
     if (_activeEngine == ActiveEngine.aether) targetSocksPort = 1819;
     if (_activeEngine == ActiveEngine.tor) targetSocksPort = 9050;
+    if (_activeEngine == ActiveEngine.psiphon) targetSocksPort = 9081;
 
     try {
       Map<String, dynamic>? data = await _querySocks5Json(targetSocksPort, "ip-api.com", "/json/", timeoutMs: 3500);
@@ -828,12 +862,29 @@ class _HomePageState extends State<HomePage> {
     try {
       final SharedPreferences prefs = await SharedPreferences.getInstance();
       final bool? savedBypass = prefs.getBool('bypass_iran_traffic');
-      if (savedBypass != null && mounted) {
+      final bool? savedHybrid = prefs.getBool('hybrid_mode_traffic');
+      if (mounted) {
         setState(() {
-          _bypassIran = savedBypass;
+          if (savedBypass != null) _bypassIran = savedBypass;
+          if (savedHybrid != null) _isHybridMode = savedHybrid;
         });
       }
     } catch (_) {}
+  }
+
+  Future<void> _setHybridModeSetting(bool value) async {
+    setState(() {
+      _isHybridMode = value;
+    });
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('hybrid_mode_traffic', value);
+      AppLogger.log("HYBRID", "وضعیت حالت هیبریدی: $value");
+    } catch (_) {}
+
+    if (_selectedAccountIndex >= 0 && _selectedAccountIndex < _fetchedAccounts.length) {
+      _updateSelectedConfig();
+    }
   }
 
   Future<void> _setBypassIranSetting(bool value) async {
@@ -896,6 +947,7 @@ class _HomePageState extends State<HomePage> {
     await _loadExhaustedWorkers();
     await _fetchAndLoadAccounts();
     await _restoreSavedState();
+    _fetchAtcInfo();
 
     _logTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
       try {
@@ -942,7 +994,9 @@ class _HomePageState extends State<HomePage> {
   Future<void> _resetAllEngines() async {
     _stopHeartbeat();
     _torProgressTimer?.cancel();
-    await flutterV2ray.stopV2Ray();
+    try {
+      await flutterV2ray.stopV2Ray();
+    } catch (_) {}
     try { await _torChannel.invokeMethod('killAllCores'); } catch (_) {}
     try { await _aetherChannel.invokeMethod('stopAether'); } catch (_) {}
     await _saveEngineState(ActiveEngine.none);
@@ -1236,14 +1290,35 @@ class _HomePageState extends State<HomePage> {
   }
 
   String _generateBridgeV2RayConfig(int socksPort, String outboundTag) {
-    final List<Map<String, dynamic>> rules = [];
-
-    // ارسال DNS به پراکسی بالادستی جهت عبور از مسمومیت
-    rules.add({
-      "type": "field",
-      "port": 53,
-      "outboundTag": outboundTag
-    });
+    final List<Map<String, dynamic>> rules = [
+      // ۱. مسدودسازی پروتکل QUIC جهت اجبار یوتیوب به سوئیچ به TCP
+      {
+        "type": "field",
+        "port": "443",
+        "network": "udp",
+        "outboundTag": "block"
+      },
+      // ۲. مسدودسازی Private DNS شیائومی
+      {
+        "type": "field",
+        "port": "853",
+        "network": "tcp,udp",
+        "outboundTag": "block"
+      },
+      // ۳. مسدودسازی IPv6
+      {
+        "type": "field",
+        "ip": ["::/0"],
+        "outboundTag": "block"
+      },
+      // ۴. هدایت کل ترافیک DNS به پروکسی
+      {
+        "type": "field",
+        "port": "53",
+        "network": "tcp,udp",
+        "outboundTag": outboundTag
+      }
+    ];
 
     if (_bypassIran) {
       rules.addAll([
@@ -1342,6 +1417,88 @@ class _HomePageState extends State<HomePage> {
       }
     };
     return jsonEncode(bridgeConfig);
+  }
+
+  Future<void> _connectPsiphon() async {
+    if (_isTransitioning) return;
+
+    setState(() {
+      _isTransitioning = true;
+      _publicIp = null;
+      _ipCountry = null;
+      _ipFlagEmoji = null;
+      _realPingMs = null;
+    });
+
+    _showSnackBar("در حال اتصال به شبکه سایفون ($_selectedPsiphonCountry)...");
+    await _resetAllEngines();
+
+    try {
+      if (_isPsiphonHybrid) {
+        _showSnackBar("راه‌اندازی پل اَتر مسک برای سایفون...");
+        final dynamic aetherRes = await _aetherChannel.invokeMethod('startSmartAether', {'port': 1819});
+        if (aetherRes == null) {
+          throw Exception("پل اَتر پاسخگو نبود.");
+        }
+      }
+
+      final bool started = await _torChannel.invokeMethod('startPsiphon', {
+        'port': 9081,
+        'isHybrid': _isPsiphonHybrid,
+        'region': _selectedPsiphonCountry,
+      }) ?? false;
+
+      if (!started) {
+        throw Exception("عدم امکان استارت پروسس سایفون");
+      }
+
+      bool socksReady = false;
+      for (int i = 1; i <= 90; i++) {
+        await Future.delayed(const Duration(milliseconds: 500));
+        socksReady = await _torChannel.invokeMethod('checkPsiphonReady', {
+          'port': 9081,
+          'timeoutMs': 800,
+        }) ?? false;
+        if (socksReady) break;
+      }
+
+      if (!socksReady) {
+        throw Exception("تایم‌اوت ساکس سایفون (پورت ۹۰۸۱)");
+      }
+
+      if (await flutterV2ray.requestPermission()) {
+        final String psiphonConfig = _generateBridgeV2RayConfig(9081, "psiphon-proxy");
+        
+        flutterV2ray.startV2Ray(
+          remark: "Psiphon (${_selectedPsiphonCountry.toUpperCase()})",
+          config: psiphonConfig,
+          blockedApps: [appPackageName],
+          proxyOnly: false,
+          notificationDisconnectButtonName: "DISCONNECT",
+        );
+
+        await _saveEngineState(ActiveEngine.psiphon);
+        _startHeartbeat();
+
+        if (mounted) {
+          setState(() {
+            _activeEngine = ActiveEngine.psiphon;
+            _isTransitioning = false;
+          });
+        }
+        _showSnackBar("شبکه سایفون فعال شد (تونل کل دستگاه)");
+      } else {
+        await _resetAllEngines();
+        if (mounted) setState(() => _activeEngine = ActiveEngine.none);
+        _showSnackBar(_t("os_perm_err"));
+      }
+    } catch (e) {
+      await _resetAllEngines();
+      if (mounted) setState(() => _activeEngine = ActiveEngine.none);
+      _showSnackBar("خطا در سایفون: ${e.toString().replaceAll("Exception: ", "")}");
+    } finally {
+      if (mounted) setState(() => _isTransitioning = false);
+    }
   }
 
   Future<void> _connectTor() async {
@@ -1665,13 +1822,45 @@ class _HomePageState extends State<HomePage> {
       activePath = _fetchedAccounts[_selectedAccountIndex]['path'] ?? activePath;
     }
 
-    final String fastest = await _findFastestIP(activeWorker, activePath);
-    
-    if (mounted) {
-      setState(() {
-        _fastestIP = fastest;
-        _isScanningIPs = false;
-      });
+    // در حالت هیبریدی نیازی به اسکن آی‌پی در ایران و خواندن فایل بزرگ نیست؛ مستقیماً اَتر متصل می‌شود
+    final String fastest;
+    if (_isHybridMode) {
+      fastest = "104.18.0.14";
+      if (mounted) setState(() => _isScanningIPs = false);
+    } else {
+      fastest = await _findFastestIP(activeWorker, activePath);
+      if (mounted) {
+        setState(() {
+          _fastestIP = fastest;
+          _isScanningIPs = false;
+        });
+      }
+    }
+
+    // در صورت فعال بودن تیک هیبریدی، ابتدا اَتر به شکل هوشمند روی بهترین پروتکل راه‌اندازی می‌شود
+    if (_isHybridMode) {
+      _showSnackBar(_t("hybrid_starting"));
+      AppLogger.log("HYBRID", "شروع پویش هوشمند اَتر برای اتصال هیبریدی...");
+      try {
+        final dynamic result = await _aetherChannel.invokeMethod('startSmartAether', {
+          'port': 1819,
+        });
+        if (result is Map) {
+          final mode = result['mode']?.toString() ?? 'unknown';
+          final noize = result['noize']?.toString() ?? 'default';
+          _hybridStatusText = "$mode ($noize)";
+          AppLogger.log("HYBRID", "موتور اَتر با موفقیت روی $mode و نویز $noize فعال شد.");
+        }
+      } catch (e) {
+        AppLogger.log("HYBRID-ERR", "خطا در استارت هوشمند اَتر: $e");
+        await _resetAllEngines();
+        setState(() {
+          _isTransitioning = false;
+          _isScanningIPs = false;
+        });
+        _showSnackBar(_t("hybrid_failed"));
+        return;
+      }
     }
 
     if (_selectedAccountIndex >= 0 && _selectedAccountIndex < _fetchedAccounts.length) {
@@ -1680,8 +1869,18 @@ class _HomePageState extends State<HomePage> {
       final String uuid = account['uuid'] ?? '';
       final String path = account['path'] ?? '';
       
-      final String finalLink = "vless://$uuid@$fastest:443?encryption=none&security=tls&sni=$worker&fp=chrome&alpn=http%2F1.1&type=ws&host=$worker&path=${Uri.encodeComponent(path)}#RedCloud_Fastest";
+      final String targetHost = _isHybridMode ? worker : fastest;
+      final String finalLink = "vless://$uuid@$targetHost:443?encryption=none&security=tls&sni=$worker&fp=chrome&alpn=http%2F1.1&type=ws&host=$worker&path=${Uri.encodeComponent(path)}#RedCloud_Fastest";
       _parseAndSaveConfig(finalLink, updateUI: false);
+    }
+
+    if (_fullConfigJson.isEmpty) {
+      AppLogger.log("V2RAY", "کانفیگ برای استارت معتبر نیست.", isError: true);
+      _showSnackBar(_t("config_err"));
+      setState(() {
+        _isTransitioning = false;
+      });
+      return;
     }
 
     if (await flutterV2ray.requestPermission()) {
@@ -1814,16 +2013,48 @@ class _HomePageState extends State<HomePage> {
         }
       ];
 
-      // دی‌ان‌اس ضدسانسور
       configMap['dns'] = {
-        "servers": ["1.1.1.1", "8.8.8.8", "localhost"],
-        "queryStrategy": "UseIP"
+        "servers": [
+          "1.1.1.1",
+          "8.8.8.8"
+        ],
+        "queryStrategy": "UseIPv4"
       };
 
-      // روتینگ مستقیم و روتینگ DNS به تونل پروکسی
       final List<Map<String, dynamic>> routingRules = [
-        // هدایت ترافیک دی‌ان‌اس به پروکسی جهت ممانعت از جعل و مسمومیت
-        {"type": "field", "port": 53, "outboundTag": "proxy"}
+        // ۱. ممانعت قطعی از لوپ شدن باینری اَتر
+        {
+          "type": "field",
+          "ip": ["127.0.0.1/32", "188.114.96.0/20", "162.159.0.0/16"],
+          "outboundTag": "direct"
+        },
+        // ۲. مسدودسازی هوشمند پروتکل QUIC (UDP 443) تا یوتیوب فوراً به TCP سوئیچ کند و ویدیوها لود شوند
+        {
+          "type": "field",
+          "port": "443",
+          "network": "udp",
+          "outboundTag": "block"
+        },
+        // ۳. بستن Private DNS شیائومی (پورت 853)
+        {
+          "type": "field",
+          "port": "853",
+          "network": "tcp,udp",
+          "outboundTag": "block"
+        },
+        // ۴. مسدودسازی نشت IPv6 که در ایران فیلتر است
+        {
+          "type": "field",
+          "ip": ["::/0"],
+          "outboundTag": "block"
+        },
+        // ۵. هدایت تمام درخواست‌های DNS (پورت 53) به داخل بستر اَتر در آلمان
+        {
+          "type": "field",
+          "port": "53",
+          "network": "tcp,udp",
+          "outboundTag": _isHybridMode ? "aether-underlay" : "proxy"
+        }
       ];
 
       if (_bypassIran) {
@@ -1860,39 +2091,73 @@ class _HomePageState extends State<HomePage> {
         });
       }
 
+      // ۶. قانون نهایی (Catch-All): هدایت تضمینی تمام ترافیک‌های بازمانده وب به پروکسی
+      routingRules.add({
+        "type": "field",
+        "network": "tcp,udp",
+        "outboundTag": "proxy"
+      });
+
       configMap['routing'] = {
         "domainStrategy": "IPIfNonMatch",
         "rules": routingRules
       };
 
-      List<dynamic> outbounds = [];
-      if (configMap.containsKey('outbounds') && configMap['outbounds'] is List) {
-        outbounds = configMap['outbounds'];
-      }
+      final List<dynamic> outbounds = (configMap['outbounds'] as List?) ?? [];
 
       for (var outbound in outbounds) {
-        if (outbound is Map<String, dynamic>) {
-          if (!outbound.containsKey('streamSettings') || outbound['streamSettings'] == null) {
-            outbound['streamSettings'] = {};
-          }
-          final dynamic streamSettings = outbound['streamSettings'];
-          if (streamSettings is Map<String, dynamic>) {
-            if (streamSettings.containsKey('tlsSettings')) {
-              final dynamic tlsSettings = streamSettings['tlsSettings'];
-              if (tlsSettings is Map<String, dynamic>) {
-                tlsSettings.remove('allowInsecure');
-              }
+        if (outbound is Map) {
+          final stream = Map<String, dynamic>.from((outbound['streamSettings'] as Map?) ?? {});
+          final sock = Map<String, dynamic>.from((stream['sockopt'] as Map?) ?? {});
+          sock['tcpKeepAliveInterval'] = 15;
+
+          if (_isHybridMode) {
+            final tag = outbound['tag']?.toString().toLowerCase() ?? '';
+            final proto = outbound['protocol']?.toString().toLowerCase() ?? '';
+            if (tag == 'proxy' || proto == 'vless' || proto == 'vmess' || proto == 'trojan') {
+              sock['dialerProxy'] = 'aether-underlay';
             }
-            streamSettings['sockopt'] = {
-              "tcpKeepAliveInterval": 15
-            };
           }
+
+          stream['sockopt'] = sock;
+          outbound['streamSettings'] = stream;
         }
+      }
+
+      // اطمینان از وجود اوت‌باندهای direct و block
+      bool hasDirect = outbounds.any((o) => o is Map && o['tag'] == 'direct');
+      bool hasBlock = outbounds.any((o) => o is Map && o['tag'] == 'block');
+      bool hasDnsOut = outbounds.any((o) => o is Map && o['tag'] == 'dns-out');
+      if (!hasDirect) outbounds.add({"tag": "direct", "protocol": "freedom"});
+      if (!hasBlock) outbounds.add({"tag": "block", "protocol": "blackhole"});
+      if (!hasDnsOut) outbounds.add({"tag": "dns-out", "protocol": "dns"});
+
+      if (_isHybridMode) {
+        outbounds.add({
+          "tag": "aether-underlay",
+          "protocol": "socks",
+          "settings": {
+            "servers": [
+              {
+                "address": "127.0.0.1",
+                "port": 1819
+              }
+            ]
+          },
+          "streamSettings": {
+            "sockopt": {
+              "tcpKeepAliveInterval": 15
+            }
+          }
+        });
       }
 
       configMap['outbounds'] = outbounds;
       _fullConfigJson = jsonEncode(configMap);
-    } catch (_) {}
+      AppLogger.log("CONFIG", "کانفیگ V2Ray با موفقیت ساخته شد (${_fullConfigJson.length} کاراکتر)");
+    } catch (e) {
+      AppLogger.log("CONFIG-ERR", "خطا در پردازش کانفیگ: $e", isError: true);
+    }
   }
 
   void _pasteFromClipboard() async {
@@ -2054,7 +2319,8 @@ class _HomePageState extends State<HomePage> {
     final String uuid = account['uuid'] ?? '';
     final String path = account['path'] ?? '';
     
-    final String vlessLink = "vless://$uuid@$_fastestIP:443?encryption=none&security=tls&sni=$worker&fp=chrome&alpn=http%2F1.1&type=ws&host=$worker&path=${Uri.encodeComponent(path)}#$_serverName";
+    final String targetHost = _isHybridMode ? worker : _fastestIP;
+    final String vlessLink = "vless://$uuid@$targetHost:443?encryption=none&security=tls&sni=$worker&fp=chrome&alpn=http%2F1.1&type=ws&host=$worker&path=${Uri.encodeComponent(path)}#$_serverName";
     _parseAndSaveConfig(vlessLink, updateUI: false);
     
     if (mounted) {
@@ -2290,37 +2556,54 @@ class _HomePageState extends State<HomePage> {
     if (!isConnected) return const SizedBox.shrink();
 
     return Container(
-      margin: const EdgeInsets.only(top: 14, bottom: 10),
+      margin: const EdgeInsets.symmetric(vertical: 12),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: const Color(0xFF1E293B),
+        color: const Color(0xFF101726),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: _publicIp != null ? const Color(0xFF10B981).withOpacity(0.6) : const Color(0xFF3B82F6).withOpacity(0.3),
+          color: const Color(0xFF00F2FE).withOpacity(0.35),
           width: 1.2,
         ),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF00F2FE).withOpacity(0.08),
+            blurRadius: 15,
+            spreadRadius: 2,
+          )
+        ],
       ),
       child: _isTestingIp
-          ? Row(
+          ? const Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF38BDF8)),
+                SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF00F2FE)),
                 ),
-                const SizedBox(width: 10),
+                SizedBox(width: 12),
                 Text(
-                  _t("testing_ip_info"),
-                  style: const TextStyle(fontSize: 12, color: Color(0xFF38BDF8), fontWeight: FontWeight.bold),
+                  "در حال شناسایی مشخصات سرور خروجی...",
+                  style: TextStyle(fontSize: 12, color: Color(0xFF00F2FE), fontWeight: FontWeight.bold),
                 ),
               ],
             )
           : Row(
               children: [
-                Text(
-                  _ipFlagEmoji ?? "🌐",
-                  style: const TextStyle(fontSize: 26),
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF182338),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white12),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    _ipFlagEmoji ?? "🌐",
+                    style: const TextStyle(fontSize: 24),
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -2328,40 +2611,49 @@ class _HomePageState extends State<HomePage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
                           Flexible(
-                            child: Text(
-                              _ipCountry ?? "Connected Server",
-                              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.white),
-                              overflow: TextOverflow.ellipsis,
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              alignment: Alignment.centerLeft,
+                              child: SelectableText(
+                                _publicIp ?? "...",
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                  letterSpacing: 0.5,
+                                  fontFamily: 'monospace',
+                                ),
+                              ),
                             ),
                           ),
-                          if (_ipCountryCode != null && _ipCountryCode!.isNotEmpty) ...[
-                            const SizedBox(width: 6),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF3B82F6).withOpacity(0.2),
-                                borderRadius: BorderRadius.circular(5),
-                              ),
-                              child: Text(
-                                _ipCountryCode!,
-                                style: const TextStyle(fontSize: 9.5, color: Color(0xFF60A5FA), fontWeight: FontWeight.bold),
-                              ),
-                            ),
-                          ],
+                          const SizedBox(width: 4),
+                          GestureDetector(
+                            onTap: () {
+                              if (_publicIp != null) {
+                                Clipboard.setData(ClipboardData(text: _publicIp!));
+                                _showSnackBar(_t("copied_msg"));
+                              }
+                            },
+                            child: const Icon(Icons.copy_rounded, size: 13, color: Colors.grey),
+                          ),
                         ],
                       ),
                       const SizedBox(height: 3),
                       Text(
-                        "${_t("public_ip_label")}: ${_publicIp ?? '...'}",
-                        style: const TextStyle(fontSize: 11.5, color: Colors.grey, fontFamily: 'monospace'),
+                        _ipCountry ?? "Connected via RedCloud",
+                        style: const TextStyle(fontSize: 11, color: Colors.white60),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ],
                   ),
                 ),
                 if (_realPingMs != null)
                   Container(
+                    margin: const EdgeInsets.only(right: 6),
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
                       color: const Color(0xFF10B981).withOpacity(0.15),
@@ -2374,17 +2666,17 @@ class _HomePageState extends State<HomePage> {
                         const Icon(Icons.bolt_rounded, size: 14, color: Color(0xFF10B981)),
                         const SizedBox(width: 2),
                         Text(
-                          "$_realPingMs ${_t("ms")}",
+                          "$_realPingMs ms",
                           style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF10B981)),
                         ),
                       ],
                     ),
                   ),
                 IconButton(
-                  icon: const Icon(Icons.refresh_rounded, size: 18, color: Colors.grey),
+                  icon: const Icon(Icons.refresh_rounded, size: 18, color: Color(0xFF00F2FE)),
                   tooltip: "Re-test",
                   onPressed: _fetchPublicIpAndPing,
-                )
+                ),
               ],
             ),
     );
@@ -2403,6 +2695,40 @@ class _HomePageState extends State<HomePage> {
           centerTitle: true,
           backgroundColor: Colors.transparent,
           elevation: 0,
+          actions: [
+            Padding(
+              padding: const EdgeInsetsDirectional.only(end: 14.0),
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF00F2FE).withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: const Color(0xFF00F2FE).withOpacity(0.45),
+                      width: 1.1,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF00F2FE).withOpacity(0.15),
+                        blurRadius: 10,
+                      )
+                    ],
+                  ),
+                  child: const Text(
+                    "v1.2.3",
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF00F2FE),
+                      fontFamily: 'monospace',
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
         body: Column(
           children: [
@@ -2431,23 +2757,133 @@ class _HomePageState extends State<HomePage> {
             Expanded(child: _buildCurrentTabContent()),
           ],
         ),
-        bottomNavigationBar: BottomNavigationBar(
-          currentIndex: _currentTabIndex,
-          onTap: (index) => setState(() => _currentTabIndex = index),
-          type: BottomNavigationBarType.fixed,
-          backgroundColor: widget.isDarkMode ? const Color(0xFF1E293B) : const Color(0xFFFFFFFF),
-          selectedItemColor: Theme.of(context).colorScheme.primary,
-          unselectedItemColor: Colors.grey,
-          selectedFontSize: 11,
-          unselectedFontSize: 10,
-          items: [
-            BottomNavigationBarItem(icon: const Icon(Icons.dashboard_rounded), label: _t("tab_dashboard")),
-            BottomNavigationBarItem(icon: const Icon(Icons.bolt_rounded), label: _t("tab_aether")),
-            BottomNavigationBarItem(icon: const Icon(Icons.security_rounded), label: _t("tab_tor")),
-            BottomNavigationBarItem(icon: const Icon(Icons.settings_rounded), label: _t("tab_settings")),
-            BottomNavigationBarItem(icon: const Icon(Icons.verified_user_rounded), label: _t("tab_privacy")),
-            BottomNavigationBarItem(icon: const Icon(Icons.volunteer_activism_rounded), label: _t("tab_contact")),
+        bottomNavigationBar: _buildModernFloatingNavBar(),
+      ),
+    );
+  }
+
+  Widget _buildModernFloatingNavBar() {
+    final List<Map<String, dynamic>> tabs = [
+      {
+        "index": 0,
+        "title": widget.currentLang == "fa" ? "داشبورد" : "Dashboard",
+        "icon": Icons.dashboard_rounded,
+        "color": const Color(0xFF00F2FE),
+      },
+      {
+        "index": 1,
+        "title": widget.currentLang == "fa" ? "اَتر" : "Aether",
+        "icon": Icons.bolt_rounded,
+        "color": const Color(0xFF06B6D4),
+      },
+      {
+        "index": 2,
+        "title": widget.currentLang == "fa" ? "تور" : "Tor",
+        "icon": Icons.security_rounded,
+        "color": const Color(0xFFC084FC),
+      },
+      {
+        "index": 3,
+        "title": widget.currentLang == "fa" ? "سایفون" : "Psiphon",
+        "icon": Icons.hub_rounded,
+        "color": const Color(0xFF10B981),
+      },
+      {
+        "index": 4,
+        "title": widget.currentLang == "fa" ? "تنظیمات" : "Settings",
+        "icon": Icons.tune_rounded,
+        "color": const Color(0xFF38BDF8),
+      },
+    ];
+
+    final activeTab = tabs.firstWhere(
+      (t) => t['index'] == _currentTabIndex,
+      orElse: () => tabs[0],
+    );
+    final Color activeColor = activeTab['color'] as Color;
+
+    return SafeArea(
+      top: false,
+      bottom: true,
+      child: Container(
+        margin: const EdgeInsets.fromLTRB(14, 0, 14, 8),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+        decoration: BoxDecoration(
+          color: widget.isDarkMode ? const Color(0xFF0C1322) : const Color(0xFFFFFFFF),
+          borderRadius: BorderRadius.circular(28),
+          border: Border.all(
+            color: activeColor.withOpacity(0.38),
+            width: 1.4,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.4),
+              blurRadius: 20,
+              offset: const Offset(0, 8),
+            ),
+            BoxShadow(
+              color: activeColor.withOpacity(0.15),
+              blurRadius: 18,
+              spreadRadius: 1,
+            ),
           ],
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: tabs.map((tab) {
+            final int index = tab['index'] as int;
+            final bool isSelected = _currentTabIndex == index;
+            final Color itemColor = tab['color'] as Color;
+
+            return Expanded(
+              child: GestureDetector(
+                onTap: () {
+                  HapticFeedback.lightImpact();
+                  setState(() => _currentTabIndex = index);
+                },
+                behavior: HitTestBehavior.opaque,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 250),
+                  curve: Curves.easeOutCubic,
+                  padding: EdgeInsets.symmetric(
+                    vertical: isSelected ? 8 : 10,
+                    horizontal: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: isSelected
+                        ? itemColor.withOpacity(0.16)
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: isSelected ? itemColor.withOpacity(0.45) : Colors.transparent,
+                      width: 1,
+                    ),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        tab['icon'] as IconData,
+                        size: isSelected ? 22 : 20,
+                        color: isSelected ? itemColor : Colors.grey.shade500,
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        tab['title'] as String,
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                          color: isSelected ? itemColor : Colors.grey.shade500,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
         ),
       ),
     );
@@ -2458,9 +2894,10 @@ class _HomePageState extends State<HomePage> {
       case 0: return _buildDashboardTab();
       case 1: return _buildAetherTab();
       case 2: return _buildTorTab();
-      case 3: return _buildSettingsTab();
-      case 4: return _buildPrivacyTab();
-      case 5: return _buildContactTab();
+      case 3: return _buildPsiphonTab();
+      case 4: return _buildSettingsTab();
+      case 5: return _buildPrivacyTab();
+      case 6: return _buildContactTab();
       default: return _buildDashboardTab();
     }
   }
@@ -2475,251 +2912,342 @@ class _HomePageState extends State<HomePage> {
                              (_isTransitioning && _activeEngine == ActiveEngine.dashboard);
 
         return SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          padding: const EdgeInsets.symmetric(horizontal: 18.0, vertical: 8.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (_serversUpdatingMode)
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  margin: const EdgeInsets.only(bottom: 15),
-                  decoration: BoxDecoration(
-                    color: Colors.amber.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Colors.amber),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.warning_amber_rounded, color: Colors.amber),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          _t("server_updating_banner"),
-                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.amber),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              Text(
-                _t("shared_acc"),
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.grey),
-              ),
-              const SizedBox(height: 8),
+              // نوار بالایی: کلیدهای کپسولی کامپکت و ریسپانسیو
               Row(
                 children: [
+                  // کلید هیبریدی (نئون فیروزه‌ای)
                   Expanded(
-                    child: _isLoadingAccounts
-                        ? const Center(
-                            child: SizedBox(
-                              width: 24,
-                              height: 24,
-                              child: CircularProgressIndicator(strokeWidth: 2.5),
-                            ),
-                          )
-                        : _fetchedAccounts.isEmpty
-                            ? Text(
-                                _t("acc_fetch_err"),
-                                style: const TextStyle(fontSize: 12, color: Colors.redAccent),
-                              )
-                            : SingleChildScrollView(
-                                scrollDirection: Axis.horizontal,
-                                child: Row(
-                                  children: List.generate(_fetchedAccounts.length, (index) {
-                                    final isSelected = _selectedAccountIndex == index;
-                                    return Padding(
-                                      padding: const EdgeInsets.only(right: 6.0),
-                                      child: ChoiceChip(
-                                        label: Text("${_t("tab_dashboard")} ${index + 1}"),
-                                        selected: isSelected,
-                                        selectedColor: Theme.of(context).colorScheme.primary,
-                                        onSelected: (selected) {
-                                          if (selected) {
-                                            setState(() {
-                                              _selectedAccountIndex = index;
-                                              _updateSelectedConfig();
-                                            });
-                                          }
-                                        },
-                                      ),
-                                    );
-                                  }),
-                                ),
-                              ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.cached, color: Colors.blueAccent),
-                    tooltip: "Sync Accounts",
-                    onPressed: () => _fetchAndLoadAccounts(showMessage: true),
-                  )
-                ],
-              ),
-              const SizedBox(height: 25),
-              
-              Center(
-                child: GestureDetector(
-                  onTap: isConnected ? _disconnectCurrent : _connectDashboard,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 300),
-                    width: 160,
-                    height: 160,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: isConnected
-                          ? const Color(0xFF10B981).withOpacity(0.15)
-                          : isConnecting
-                              ? const Color(0xFFF59E0B).withOpacity(0.15)
-                              : const Color(0xFFEF4444).withOpacity(0.1),
-                      border: Border.all(
-                        color: isConnected
-                            ? const Color(0xFF10B981)
-                            : isConnecting
-                                ? const Color(0xFFF59E0B)
-                                : const Color(0xFFEF4444).withOpacity(0.5),
-                        width: 4,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: _isHybridMode ? const Color(0xFF00F2FE).withOpacity(0.12) : const Color(0xFF101726),
+                        borderRadius: BorderRadius.circular(30),
+                        border: Border.all(
+                          color: _isHybridMode ? const Color(0xFF00F2FE) : Colors.white12,
+                          width: 1.2,
+                        ),
+                        boxShadow: [
+                          if (_isHybridMode)
+                            BoxShadow(
+                              color: const Color(0xFF00F2FE).withOpacity(0.2),
+                              blurRadius: 10,
+                              spreadRadius: 1,
+                            )
+                        ],
                       ),
-                      boxShadow: [
-                        if (isConnected)
-                          BoxShadow(
-                            color: const Color(0xFF10B981).withOpacity(0.4),
-                            blurRadius: 25,
-                            spreadRadius: 5,
-                          ),
-                        if (isConnecting)
-                          BoxShadow(
-                            color: const Color(0xFFF59E0B).withOpacity(0.4),
-                            blurRadius: 25,
-                            spreadRadius: 5,
-                          ),
-                      ],
-                    ),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        if (isConnecting)
-                          const SizedBox(
-                            width: 45,
-                            height: 45,
-                            child: CircularProgressIndicator(
-                              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFF59E0B)),
-                              strokeWidth: 4,
-                            ),
-                          )
-                        else
-                          Icon(
-                            Icons.power_settings_new,
-                            size: 60,
-                            color: isConnected
-                                ? const Color(0xFF10B981)
-                                : const Color(0xFF94A3B8),
-                          ),
-                        const SizedBox(height: 8),
-                        Text(
-                          isConnected
-                              ? _t("connected")
-                              : _isScanningIPs
-                                  ? _t("scan_ip")
-                                  : isConnecting
-                                      ? _t("connecting")
-                                      : _t("disconnected"),
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.bold,
-                            color: isConnected
-                              ? const Color(0xFF10B981)
-                              : isConnecting
-                                  ? const Color(0xFFF59E0B)
-                                  : const Color(0xFF94A3B8),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-
-              _buildConnectionTelemetryCard(isConnected),
-              
-              const SizedBox(height: 15),
-
-              GestureDetector(
-                onTap: _openConfigBottomSheet,
-                child: Card(
-                  color: Theme.of(context).colorScheme.surface,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(15),
-                    side: BorderSide(color: Colors.grey.withOpacity(0.1)),
-                  ),
-                  elevation: 2,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
-                    child: Row(
-                      children: [
-                        const CircleAvatar(
-                          backgroundColor: Color(0xFF3B82F6),
-                          child: Icon(Icons.public, color: Colors.white),
-                        ),
-                        const SizedBox(width: 15),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
                             children: [
-                              Text(
-                                _serverName,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 15,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+                              Icon(
+                                Icons.hub_rounded,
+                                size: 15,
+                                color: _isHybridMode ? const Color(0xFF00F2FE) : Colors.grey,
                               ),
-                              const SizedBox(height: 4),
+                              const SizedBox(width: 4),
                               Text(
-                                "Protocol: $_protocolType",
-                                style: const TextStyle(
-                                  color: Colors.grey,
-                                  fontSize: 12,
+                                "Hybrid",
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                  color: _isHybridMode ? const Color(0xFF00F2FE) : Colors.grey,
                                 ),
                               ),
                             ],
                           ),
+                          Transform.scale(
+                            scale: 0.72,
+                            child: Switch(
+                              value: _isHybridMode,
+                              activeColor: const Color(0xFF00F2FE),
+                              activeTrackColor: const Color(0xFF00F2FE).withOpacity(0.3),
+                              inactiveThumbColor: Colors.grey,
+                              inactiveTrackColor: Colors.white10,
+                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              onChanged: (isConnected || isConnecting)
+                                  ? null
+                                  : (val) => _setHybridModeSetting(val),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  // کلید دور زدن ایران (سبز زمردی)
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: _bypassIran ? const Color(0xFF10B981).withOpacity(0.12) : const Color(0xFF101726),
+                        borderRadius: BorderRadius.circular(30),
+                        border: Border.all(
+                          color: _bypassIran ? const Color(0xFF10B981) : Colors.white12,
+                          width: 1.2,
                         ),
-                        const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.shield_rounded,
+                                size: 15,
+                                color: _bypassIran ? const Color(0xFF10B981) : Colors.grey,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                "Bypass IR",
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                  color: _bypassIran ? const Color(0xFF10B981) : Colors.grey,
+                                ),
+                              ),
+                            ],
+                          ),
+                          Transform.scale(
+                            scale: 0.72,
+                            child: Switch(
+                              value: _bypassIran,
+                              activeColor: const Color(0xFF10B981),
+                              activeTrackColor: const Color(0xFF10B981).withOpacity(0.3),
+                              inactiveThumbColor: Colors.grey,
+                              inactiveTrackColor: Colors.white10,
+                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              onChanged: (isConnected || isConnecting)
+                                  ? null
+                                  : (val) => _setBypassIranSetting(val),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 14),
+
+              // انتخاب‌گر اکانت‌های هوشمند
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF101726),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white10),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.dns_rounded, size: 16, color: Color(0xFF00F2FE)),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _isLoadingAccounts
+                          ? const Center(
+                              child: SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF00F2FE)),
+                              ),
+                            )
+                          : SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: Row(
+                                children: List.generate(_fetchedAccounts.length, (index) {
+                                  final isSelected = _selectedAccountIndex == index;
+                                  return Padding(
+                                    padding: const EdgeInsets.only(right: 6.0),
+                                    child: ChoiceChip(
+                                      label: Text("Server ${index + 1}"),
+                                      labelStyle: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                        color: isSelected ? Colors.black : Colors.white70,
+                                      ),
+                                      selected: isSelected,
+                                      selectedColor: const Color(0xFF00F2FE),
+                                      backgroundColor: const Color(0xFF182338),
+                                      onSelected: (selected) {
+                                        if (selected) {
+                                          setState(() {
+                                            _selectedAccountIndex = index;
+                                            _updateSelectedConfig();
+                                          });
+                                        }
+                                      },
+                                    ),
+                                  );
+                                }),
+                              ),
+                            ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.add_link_rounded, color: Color(0xFF00F2FE), size: 18),
+                      tooltip: "ورود دستی کانفیگ",
+                      onPressed: _openConfigBottomSheet,
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.sync_rounded, color: Color(0xFF00F2FE), size: 18),
+                      tooltip: "Sync Accounts",
+                      onPressed: () => _fetchAndLoadAccounts(showMessage: true),
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 26),
+
+              // دکمه بزرگ مرکزی با رینگ‌های نئونی تابان (مشابه دکمه مرکزی دسکتاپ)
+              Center(
+                child: Column(
+                  children: [
+                    GestureDetector(
+                      onTap: isConnected ? _disconnectCurrent : _connectDashboard,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 350),
+                        width: 175,
+                        height: 175,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: const Color(0xFF0E1422),
+                          border: Border.all(
+                            color: isConnected
+                                ? const Color(0xFF00F2FE)
+                                : isConnecting
+                                    ? const Color(0xFFF59E0B)
+                                    : const Color(0xFF1E293B),
+                            width: 4.5,
+                          ),
+                          boxShadow: [
+                            if (isConnected) ...[
+                              BoxShadow(
+                                color: const Color(0xFF00F2FE).withOpacity(0.4),
+                                blurRadius: 35,
+                                spreadRadius: 6,
+                              ),
+                              BoxShadow(
+                                color: const Color(0xFF00F2FE).withOpacity(0.15),
+                                blurRadius: 60,
+                                spreadRadius: 15,
+                              ),
+                            ],
+                            if (isConnecting)
+                              BoxShadow(
+                                color: const Color(0xFFF59E0B).withOpacity(0.4),
+                                blurRadius: 30,
+                                spreadRadius: 5,
+                              ),
+                          ],
+                        ),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            if (isConnecting)
+                              const SizedBox(
+                                width: 50,
+                                height: 50,
+                                child: CircularProgressIndicator(
+                                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFF59E0B)),
+                                  strokeWidth: 4,
+                                ),
+                              )
+                            else
+                              Icon(
+                                Icons.power_settings_new_rounded,
+                                size: 68,
+                                color: isConnected
+                                    ? const Color(0xFF00F2FE)
+                                    : const Color(0xFF475569),
+                              ),
+                            const SizedBox(height: 8),
+                            Text(
+                              isConnected
+                                  ? _t("connected")
+                                  : isConnecting
+                                      ? _t("connecting")
+                                      : _t("disconnected"),
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 0.8,
+                                color: isConnected
+                                    ? const Color(0xFF00F2FE)
+                                    : isConnecting
+                                        ? const Color(0xFFF59E0B)
+                                        : const Color(0xFF64748B),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      _isHybridMode ? "Tap to connect (Hybrid)" : "Tap to connect (Direct)",
+                      style: const TextStyle(fontSize: 12, color: Colors.grey, fontWeight: FontWeight.w500),
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 10),
+
+              // کارت تلمتری آی‌پی
+              _buildConnectionTelemetryCard(isConnected),
+
+              const SizedBox(height: 4),
+
+              // باکس‌های سرعت دانلود و آپلود (مشابه تصویر)
+              _buildStatsGrid(isConnected, value),
+
+              const SizedBox(height: 14),
+
+              // نوار تحتانی Live Defense و نشانگر لایه اَتر
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF101726),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white10),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.radar_rounded, size: 16, color: Color(0xFF00F2FE)),
+                        const SizedBox(width: 8),
+                        Text(
+                          _isHybridMode ? "Live Defense & Chained Radar" : "Standard V2Ray Protection",
+                          style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold, color: Colors.white70),
+                        ),
                       ],
                     ),
-                  ),
-                ),
-              ),
-
-              if (_fastestIP != "104.18.0.14" && _bestPing > 0)
-                Center(
-                  child: Padding(
-                    padding: const EdgeInsets.only(top: 8.0),
-                    child: Text(
-                      "${_t("ping_info")}$_fastestIP ($_bestPing ${_t("ms")})",
-                      style: const TextStyle(fontSize: 12, color: Colors.greenAccent, fontWeight: FontWeight.bold),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF10B981).withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: const Color(0xFF10B981).withOpacity(0.3)),
+                      ),
+                      child: Text(
+                        _isHybridMode && _hybridStatusText.isNotEmpty ? "Aether: $_hybridStatusText" : (_isHybridMode ? "Aether: Active" : "Direct: Active"),
+                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF10B981)),
+                      ),
                     ),
-                  ),
-                ),
-
-              const SizedBox(height: 15),
-              _buildStatsGrid(isConnected, value),
-              const SizedBox(height: 15),
-
-              Center(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1E293B),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    "${_t("conn_time")}${isConnected ? value.duration : '00:00:00'}",
-                    style: const TextStyle(fontWeight: FontWeight.w500),
-                  ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 15),
+
+              const SizedBox(height: 20),
             ],
           ),
         );
@@ -2736,112 +3264,206 @@ class _HomePageState extends State<HomePage> {
                              (_isTransitioning && _activeEngine == ActiveEngine.none);
 
         return SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 10.0),
+          padding: const EdgeInsets.symmetric(horizontal: 18.0, vertical: 8.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(
-                _t("aether_title"),
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                _t("aether_subtitle"),
-                style: const TextStyle(fontSize: 12, color: Colors.grey),
-              ),
-              const SizedBox(height: 20),
-
-              Center(
-                child: GestureDetector(
-                  onTap: isConnecting
-                      ? null
-                      : isConnected
-                          ? _disconnectCurrent
-                          : _connectAether,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 300),
-                    width: 150,
-                    height: 150,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: isConnected
-                          ? const Color(0xFF06B6D4).withOpacity(0.15)
-                          : isConnecting
-                              ? const Color(0xFFF59E0B).withOpacity(0.15)
-                              : const Color(0xFF64748B).withOpacity(0.1),
-                      border: Border.all(
-                        color: isConnected
-                            ? const Color(0xFF06B6D4)
-                            : isConnecting
-                                ? const Color(0xFFF59E0B)
-                                : const Color(0xFF64748B).withOpacity(0.5),
-                        width: 4,
+              // کارت فوق‌پیشرفته استخر کلیدهای ضدسانسور ATC
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF101726),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: const Color(0xFF06B6D4).withOpacity(0.35),
+                    width: 1.2,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF06B6D4).withOpacity(0.08),
+                      blurRadius: 15,
+                    )
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF06B6D4).withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(10),
                       ),
-                      boxShadow: [
-                        if (isConnected)
-                          BoxShadow(
-                            color: const Color(0xFF06B6D4).withOpacity(0.4),
-                            blurRadius: 25,
-                            spreadRadius: 5,
-                          ),
-                        if (isConnecting)
-                          BoxShadow(
-                            color: const Color(0xFFF59E0B).withOpacity(0.4),
-                            blurRadius: 25,
-                            spreadRadius: 5,
-                          ),
-                      ],
+                      child: const Icon(Icons.vpn_key_rounded, size: 20, color: Color(0xFF06B6D4)),
                     ),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        if (isConnecting)
-                          const SizedBox(
-                            width: 40,
-                            height: 40,
-                            child: CircularProgressIndicator(
-                              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFF59E0B)),
-                              strokeWidth: 3.5,
-                            ),
-                          )
-                        else
-                          Icon(
-                            Icons.bolt,
-                            size: 55,
-                            color: isConnected
-                                ? const Color(0xFF06B6D4)
-                                : const Color(0xFF94A3B8),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Text(
+                                "استخر کلید (ATC): ",
+                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white70),
+                              ),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF06B6D4).withOpacity(0.15),
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(color: const Color(0xFF06B6D4).withOpacity(0.4)),
+                                ),
+                                child: Text(
+                                  _atcAccountName.isNotEmpty && _atcAccountName != "نامشخص" ? _atcAccountName : "آماده بارگذاری",
+                                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF06B6D4)),
+                                ),
+                              ),
+                            ],
                           ),
-                        const SizedBox(height: 6),
-                        Text(
-                          isConnected
-                              ? _t("connected")
-                              : isConnecting
-                                  ? _t("connecting")
-                                  : _t("disconnected"),
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.bold,
+                          const SizedBox(height: 3),
+                          Text(
+                            "انقضا و چرخش خودکار: $_atcRemainingDays روز باقی‌مانده",
+                            style: const TextStyle(fontSize: 10.5, color: Colors.grey),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.autorenew_rounded, size: 20, color: Color(0xFF06B6D4)),
+                      tooltip: "تعویض تصادفی اکانت",
+                      onPressed: (isConnected || isConnecting)
+                          ? null
+                          : () async {
+                              await _aetherChannel.invokeMethod('resetIdentity');
+                              await _fetchAtcInfo();
+                              _showSnackBar("اکانت هویت بازنشانی شد؛ در اتصال بعدی کلید تصادفی جدیدی انتخاب می‌شود.");
+                            },
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 24),
+
+              // دکمه بزرگ مرکزی با رینگ‌های نئونی آبی اَتر (مشابه داشبورد)
+              Center(
+                child: Column(
+                  children: [
+                    GestureDetector(
+                      onTap: isConnecting
+                          ? null
+                          : isConnected
+                              ? _disconnectCurrent
+                              : _connectAether,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 350),
+                        width: 175,
+                        height: 175,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: const Color(0xFF0E1422),
+                          border: Border.all(
                             color: isConnected
                                 ? const Color(0xFF06B6D4)
                                 : isConnecting
                                     ? const Color(0xFFF59E0B)
-                                    : const Color(0xFF94A3B8),
+                                    : const Color(0xFF1E293B),
+                            width: 4.5,
                           ),
+                          boxShadow: [
+                            if (isConnected) ...[
+                              BoxShadow(
+                                color: const Color(0xFF06B6D4).withOpacity(0.45),
+                                blurRadius: 35,
+                                spreadRadius: 6,
+                              ),
+                              BoxShadow(
+                                color: const Color(0xFF06B6D4).withOpacity(0.18),
+                                blurRadius: 60,
+                                spreadRadius: 15,
+                              ),
+                            ],
+                            if (isConnecting)
+                              BoxShadow(
+                                color: const Color(0xFFF59E0B).withOpacity(0.4),
+                                blurRadius: 30,
+                                spreadRadius: 5,
+                              ),
+                          ],
                         ),
-                      ],
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            if (isConnecting)
+                              const SizedBox(
+                                width: 50,
+                                height: 50,
+                                child: CircularProgressIndicator(
+                                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFF59E0B)),
+                                  strokeWidth: 4,
+                                ),
+                              )
+                            else
+                              Icon(
+                                Icons.bolt_rounded,
+                                size: 68,
+                                color: isConnected
+                                    ? const Color(0xFF06B6D4)
+                                    : const Color(0xFF475569),
+                              ),
+                            const SizedBox(height: 8),
+                            Text(
+                              isConnected
+                                  ? _t("connected")
+                                  : isConnecting
+                                      ? _t("connecting")
+                                      : _t("disconnected"),
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 0.8,
+                                color: isConnected
+                                    ? const Color(0xFF06B6D4)
+                                    : isConnecting
+                                        ? const Color(0xFFF59E0B)
+                                        : const Color(0xFF64748B),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
-                  ),
+                    const SizedBox(height: 12),
+                    Text(
+                      isConnected ? "Connected to Aether WARP Tunnel" : "Tap to connect (Aether Engine)",
+                      style: const TextStyle(fontSize: 12, color: Colors.grey, fontWeight: FontWeight.w500),
+                    ),
+                  ],
                 ),
               ),
 
+              const SizedBox(height: 10),
+
+              // کارت مشخصات آی‌پی سرور
               _buildConnectionTelemetryCard(isConnected),
 
-              const SizedBox(height: 15),
+              const SizedBox(height: 4),
 
-              Text(
-                _t("aether_mode_select"),
-                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.blueAccent),
+              // کارت‌های سرعت دانلود و آپلود
+              _buildStatsGrid(isConnected, value),
+
+              const SizedBox(height: 20),
+
+              // عنوان انتخاب پروتکل‌ها
+              Row(
+                children: [
+                  const Icon(Icons.tune_rounded, size: 16, color: Color(0xFF06B6D4)),
+                  const SizedBox(width: 8),
+                  Text(
+                    _t("aether_mode_select"),
+                    style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold, color: Colors.white),
+                  ),
+                ],
               ),
               const SizedBox(height: 12),
 
@@ -2849,46 +3471,320 @@ class _HomePageState extends State<HomePage> {
                 modeKey: "auto",
                 title: _t("mode_auto_title"),
                 desc: _t("mode_auto_desc"),
-                icon: Icons.auto_awesome,
-                color: Colors.cyanAccent,
+                badge: "SMART",
+                icon: Icons.auto_awesome_rounded,
+                color: const Color(0xFF00F2FE),
                 disabled: isConnected || isConnecting,
               ),
               _buildAetherModeOption(
                 modeKey: "masque_h2",
                 title: _t("mode_masque_h2_title"),
                 desc: _t("mode_masque_h2_desc"),
-                icon: Icons.shield,
-                color: Colors.cyan,
+                badge: "FRAGMENT",
+                icon: Icons.shield_rounded,
+                color: const Color(0xFF06B6D4),
                 disabled: isConnected || isConnecting,
               ),
               _buildAetherModeOption(
                 modeKey: "masque",
                 title: _t("mode_masque_title"),
                 desc: _t("mode_masque_desc"),
-                icon: Icons.flash_on,
-                color: Colors.amber,
+                badge: "HTTP/3",
+                icon: Icons.flash_on_rounded,
+                color: const Color(0xFFF59E0B),
                 disabled: isConnected || isConnecting,
               ),
               _buildAetherModeOption(
                 modeKey: "gool",
                 title: _t("mode_gool_title"),
                 desc: _t("mode_gool_desc"),
-                icon: Icons.layers,
-                color: Colors.purpleAccent,
+                badge: "DUAL WARP",
+                icon: Icons.layers_rounded,
+                color: const Color(0xFFA855F7),
                 disabled: isConnected || isConnecting,
               ),
               _buildAetherModeOption(
                 modeKey: "wireguard",
                 title: _t("mode_wireguard_title"),
                 desc: _t("mode_wireguard_desc"),
-                icon: Icons.vpn_lock,
-                color: Colors.lightGreen,
+                badge: "NATIVE",
+                icon: Icons.vpn_lock_rounded,
+                color: const Color(0xFF10B981),
                 disabled: isConnected || isConnecting,
               ),
 
-              const SizedBox(height: 15),
+              const SizedBox(height: 20),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildPsiphonTab() {
+    return ValueListenableBuilder<V2RayStatus>(
+      valueListenable: v2rayStatus,
+      builder: (context, value, child) {
+        final isConnected = _activeEngine == ActiveEngine.psiphon && value.state == "CONNECTED";
+        final isConnecting = (_activeEngine == ActiveEngine.psiphon && value.state == "CONNECTING") ||
+                             (_isTransitioning && _activeEngine == ActiveEngine.none);
+
+        return SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 18.0, vertical: 8.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // کلید بالای صفحه: Psiphon over MASQUE Bridge
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: _isPsiphonHybrid ? const Color(0xFF10B981).withOpacity(0.12) : const Color(0xFF101726),
+                  borderRadius: BorderRadius.circular(30),
+                  border: Border.all(
+                    color: _isPsiphonHybrid ? const Color(0xFF10B981) : Colors.white12,
+                    width: 1.3,
+                  ),
+                  boxShadow: [
+                    if (_isPsiphonHybrid)
+                      BoxShadow(
+                        color: const Color(0xFF10B981).withOpacity(0.2),
+                        blurRadius: 10,
+                        spreadRadius: 1,
+                      )
+                  ],
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.hub_rounded,
+                          size: 16,
+                          color: _isPsiphonHybrid ? const Color(0xFF10B981) : Colors.grey,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          "Psiphon over MASQUE Bridge",
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: _isPsiphonHybrid ? const Color(0xFF10B981) : Colors.grey,
+                          ),
+                        ),
+                      ],
+                    ),
+                    Transform.scale(
+                      scale: 0.75,
+                      child: Switch(
+                        value: _isPsiphonHybrid,
+                        activeColor: const Color(0xFF10B981),
+                        activeTrackColor: const Color(0xFF10B981).withOpacity(0.3),
+                        inactiveThumbColor: Colors.grey,
+                        inactiveTrackColor: Colors.white10,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        onChanged: (isConnected || isConnecting)
+                            ? null
+                            : (val) => setState(() => _isPsiphonHybrid = val),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 14),
+
+              // باکس انتخاب کشور خروجی (Exit Node Country)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF101726),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white10),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.public_rounded, size: 20, color: Color(0xFF10B981)),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: Text(
+                        "Exit Node Country:",
+                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.white70),
+                      ),
+                    ),
+                    DropdownButton<String>(
+                      value: _selectedPsiphonCountry,
+                      dropdownColor: const Color(0xFF101726),
+                      underline: const SizedBox.shrink(),
+                      icon: const Icon(Icons.arrow_drop_down, color: Color(0xFF10B981)),
+                      style: const TextStyle(color: Color(0xFF10B981), fontWeight: FontWeight.bold, fontSize: 13),
+                      onChanged: (isConnected || isConnecting)
+                          ? null
+                          : (val) {
+                              if (val != null) setState(() => _selectedPsiphonCountry = val);
+                            },
+                      items: _psiphonCountries.map((c) {
+                        return DropdownMenuItem<String>(
+                          value: c['code'],
+                          child: Text(c['name']!),
+                        );
+                      }).toList(),
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 24),
+
+              // دکمه بزرگ مرکزی با رینگ سبز زمردی درخشان
+              Center(
+                child: Column(
+                  children: [
+                    GestureDetector(
+                      onTap: isConnecting
+                          ? null
+                          : isConnected
+                              ? _disconnectCurrent
+                              : _connectPsiphon,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 350),
+                        width: 175,
+                        height: 175,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: const Color(0xFF0E1422),
+                          border: Border.all(
+                            color: isConnected
+                                ? const Color(0xFF10B981)
+                                : isConnecting
+                                    ? const Color(0xFFF59E0B)
+                                    : const Color(0xFF1E293B),
+                            width: 4.5,
+                          ),
+                          boxShadow: [
+                            if (isConnected) ...[
+                              BoxShadow(
+                                color: const Color(0xFF10B981).withOpacity(0.4),
+                                blurRadius: 35,
+                                spreadRadius: 6,
+                              ),
+                              BoxShadow(
+                                color: const Color(0xFF10B981).withOpacity(0.15),
+                                blurRadius: 60,
+                                spreadRadius: 15,
+                              ),
+                            ],
+                            if (isConnecting)
+                              BoxShadow(
+                                color: const Color(0xFFF59E0B).withOpacity(0.4),
+                                blurRadius: 30,
+                                spreadRadius: 5,
+                              ),
+                          ],
+                        ),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            if (isConnecting)
+                              const SizedBox(
+                                width: 50,
+                                height: 50,
+                                child: CircularProgressIndicator(
+                                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFF59E0B)),
+                                  strokeWidth: 4,
+                                ),
+                              )
+                            else
+                              Icon(
+                                Icons.hub_rounded,
+                                size: 68,
+                                color: isConnected
+                                    ? const Color(0xFF10B981)
+                                    : const Color(0xFF475569),
+                              ),
+                            const SizedBox(height: 8),
+                            Text(
+                              isConnected
+                                  ? "Connected"
+                                  : isConnecting
+                                      ? "Connecting..."
+                                      : "Disconnected",
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 0.8,
+                                color: isConnected
+                                    ? const Color(0xFF10B981)
+                                    : isConnecting
+                                        ? const Color(0xFFF59E0B)
+                                        : const Color(0xFF64748B),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      isConnected
+                          ? "Connected to Psiphon over MASQUE"
+                          : "Tap to connect (Psiphon)",
+                      style: const TextStyle(fontSize: 12, color: Colors.grey, fontWeight: FontWeight.w500),
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 10),
+
+              // کارت تلمتری آی‌پی خروجی
+              _buildConnectionTelemetryCard(isConnected),
+
+              const SizedBox(height: 4),
+
+              // کارت‌های سرعت دانلود و آپلود
               _buildStatsGrid(isConnected, value),
-              const SizedBox(height: 15),
+
+              const SizedBox(height: 14),
+
+              // نوار وضعیت تحتانی
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF101726),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white10),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.shield_rounded, size: 16, color: Color(0xFF10B981)),
+                        SizedBox(width: 8),
+                        Text(
+                          "Psiphon Protocol Protection",
+                          style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold, color: Colors.white70),
+                        ),
+                      ],
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF10B981).withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: const Color(0xFF10B981).withOpacity(0.3)),
+                      ),
+                      child: Text(
+                        "Region: $_selectedPsiphonCountry",
+                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF10B981)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 20),
             ],
           ),
         );
@@ -2904,50 +3800,93 @@ class _HomePageState extends State<HomePage> {
         final isConnecting = _isTransitioning && _activeEngine != ActiveEngine.tor;
 
         return SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 10.0),
+          padding: const EdgeInsets.symmetric(horizontal: 18.0, vertical: 8.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(
-                _t("tor_title"),
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                _t("tor_subtitle"),
-                style: const TextStyle(fontSize: 12, color: Colors.grey),
-              ),
-              const SizedBox(height: 15),
-
+              // کارت سایبرپانک ساخت لایه‌های پیازی تور
               Container(
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF1E293B),
-                  borderRadius: BorderRadius.circular(14),
+                  color: const Color(0xFF101726),
+                  borderRadius: BorderRadius.circular(16),
                   border: Border.all(
                     color: isConnected 
-                        ? const Color(0xFFA855F7) 
+                        ? const Color(0xFFC084FC) 
                         : isConnecting 
                             ? const Color(0xFFF59E0B) 
-                            : Colors.white10,
+                            : Colors.white12,
+                    width: 1.2,
                   ),
+                  boxShadow: [
+                    if (isConnected || isConnecting)
+                      BoxShadow(
+                        color: (isConnected ? const Color(0xFFC084FC) : const Color(0xFFF59E0B)).withOpacity(0.12),
+                        blurRadius: 16,
+                      )
+                  ],
                 ),
                 child: Column(
                   children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.hub_rounded, 
+                              size: 16, 
+                              color: isConnected ? const Color(0xFFC084FC) : const Color(0xFFF59E0B),
+                            ),
+                            const SizedBox(width: 8),
+                            const Text(
+                              "Tor Circuit Pipeline",
+                              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+                            ),
+                          ],
+                        ),
+                        if (_torBootstrapProgress > 0)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFC084FC).withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: const Color(0xFFC084FC).withOpacity(0.35)),
+                            ),
+                            child: Text(
+                              "$_torBootstrapProgress%",
+                              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFFC084FC)),
+                            ),
+                          ),
+                      ],
+                    ),
+                    if (isConnecting && _torBootstrapProgress > 0) ...[
+                      const SizedBox(height: 10),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(6),
+                        child: LinearProgressIndicator(
+                          value: _torBootstrapProgress / 100,
+                          backgroundColor: Colors.white10,
+                          valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFC084FC)),
+                          minHeight: 4,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
                     _buildStepRow(
                       stepNumber: 1,
                       title: _t("tor_layer_aether"),
                       isDone: isConnected || (isConnecting && _torCurrentStep > 1),
                       isActive: isConnecting && _torCurrentStep == 1,
                     ),
-                    const Divider(height: 12, color: Colors.white10),
+                    const Divider(height: 14, color: Colors.white10),
                     _buildStepRow(
                       stepNumber: 2,
-                      title: "${_t("tor_layer_tor")} ${_torBootstrapProgress > 0 ? '($_torBootstrapProgress%)' : ''}",
+                      title: _t("tor_layer_tor"),
                       isDone: isConnected || (isConnecting && _torCurrentStep > 2),
                       isActive: isConnecting && _torCurrentStep == 2,
                     ),
-                    const Divider(height: 12, color: Colors.white10),
+                    const Divider(height: 14, color: Colors.white10),
                     _buildStepRow(
                       stepNumber: 3,
                       title: _t("tor_layer_vpn"),
@@ -2958,134 +3897,163 @@ class _HomePageState extends State<HomePage> {
                 ),
               ),
 
-              const SizedBox(height: 20),
+              const SizedBox(height: 24),
 
+              // دکمه مرکزی تور با حلقه‌های بنفش نئونی تابان
               Center(
-                child: GestureDetector(
-                  onTap: isConnecting
-                      ? null
-                      : isConnected
-                          ? _disconnectCurrent
-                          : _connectTor,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 300),
-                    width: 155,
-                    height: 155,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: isConnected
-                          ? const Color(0xFF9333EA).withOpacity(0.15)
-                          : isConnecting
-                              ? const Color(0xFFF59E0B).withOpacity(0.15)
-                              : const Color(0xFF64748B).withOpacity(0.1),
-                      border: Border.all(
-                        color: isConnected
-                            ? const Color(0xFFA855F7)
-                            : isConnecting
-                                ? const Color(0xFFF59E0B)
-                                : const Color(0xFF64748B).withOpacity(0.5),
-                        width: 4,
-                      ),
-                      boxShadow: [
-                        if (isConnected)
-                          BoxShadow(
-                            color: const Color(0xFF9333EA).withOpacity(0.4),
-                            blurRadius: 25,
-                            spreadRadius: 5,
-                          ),
-                        if (isConnecting)
-                          BoxShadow(
-                            color: const Color(0xFFF59E0B).withOpacity(0.4),
-                            blurRadius: 25,
-                            spreadRadius: 5,
-                          ),
-                      ],
-                    ),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        if (isConnecting) ...[
-                          Stack(
-                            alignment: Alignment.center,
-                            children: [
-                              SizedBox(
-                                width: 45,
-                                height: 45,
-                                child: CircularProgressIndicator(
-                                  value: _torBootstrapProgress > 0 ? _torBootstrapProgress / 100 : null,
-                                  valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFF59E0B)),
-                                  strokeWidth: 3.5,
-                                ),
-                              ),
-                              if (_torBootstrapProgress > 0)
-                                Text(
-                                  "$_torBootstrapProgress%",
-                                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.amberAccent),
-                                )
-                            ],
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            _t("connecting"),
-                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFFF59E0B)),
-                          ),
-                        ] else ...[
-                          Icon(
-                            Icons.security_rounded,
-                            size: 55,
+                child: Column(
+                  children: [
+                    GestureDetector(
+                      onTap: isConnecting
+                          ? null
+                          : isConnected
+                              ? _disconnectCurrent
+                              : _connectTor,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 350),
+                        width: 175,
+                        height: 175,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: const Color(0xFF0E1422),
+                          border: Border.all(
                             color: isConnected
                                 ? const Color(0xFFC084FC)
-                                : const Color(0xFF94A3B8),
+                                : isConnecting
+                                    ? const Color(0xFFF59E0B)
+                                    : const Color(0xFF1E293B),
+                            width: 4.5,
                           ),
-                          const SizedBox(height: 6),
-                          Text(
-                            isConnected
-                                ? _t("connected")
-                                : _t("disconnected"),
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.bold,
-                              color: isConnected
-                                  ? const Color(0xFFC084FC)
-                                  : const Color(0xFF94A3B8),
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-
-              Padding(
-                padding: const EdgeInsets.only(top: 14.0),
-                child: Center(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF1E293B),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Text(
-                      _torStepStatus,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: isConnected ? const Color(0xFFC084FC) : Colors.amberAccent,
-                        fontWeight: FontWeight.bold,
+                          boxShadow: [
+                            if (isConnected) ...[
+                              BoxShadow(
+                                color: const Color(0xFFC084FC).withOpacity(0.45),
+                                blurRadius: 35,
+                                spreadRadius: 6,
+                              ),
+                              BoxShadow(
+                                color: const Color(0xFFC084FC).withOpacity(0.18),
+                                blurRadius: 60,
+                                spreadRadius: 15,
+                              ),
+                            ],
+                            if (isConnecting)
+                              BoxShadow(
+                                color: const Color(0xFFF59E0B).withOpacity(0.4),
+                                blurRadius: 30,
+                                spreadRadius: 5,
+                              ),
+                          ],
+                        ),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            if (isConnecting) ...[
+                              Stack(
+                                alignment: Alignment.center,
+                                children: [
+                                  SizedBox(
+                                    width: 50,
+                                    height: 50,
+                                    child: CircularProgressIndicator(
+                                      value: _torBootstrapProgress > 0 ? _torBootstrapProgress / 100 : null,
+                                      valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFF59E0B)),
+                                      strokeWidth: 4,
+                                    ),
+                                  ),
+                                  if (_torBootstrapProgress > 0)
+                                    Text(
+                                      "$_torBootstrapProgress%",
+                                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.amberAccent),
+                                    )
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                _t("connecting"),
+                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFFF59E0B)),
+                              ),
+                            ] else ...[
+                              Icon(
+                                Icons.security_rounded,
+                                size: 68,
+                                color: isConnected
+                                    ? const Color(0xFFC084FC)
+                                    : const Color(0xFF475569),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                isConnected
+                                    ? _t("connected")
+                                    : _t("disconnected"),
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 0.8,
+                                  color: isConnected
+                                      ? const Color(0xFFC084FC)
+                                      : const Color(0xFF64748B),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
                       ),
-                      textAlign: TextAlign.center,
                     ),
+                    const SizedBox(height: 12),
+                    Text(
+                      isConnected ? "Connected to Onion Circuits" : "Tap to connect (Tor Onion Network)",
+                      style: const TextStyle(fontSize: 12, color: Colors.grey, fontWeight: FontWeight.w500),
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 10),
+
+              // وضعیت استپ در کپسول نئونی
+              Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF101726),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: isConnected ? const Color(0xFFC084FC).withOpacity(0.4) : Colors.white10,
+                    ),
+                  ),
+                  child: Text(
+                    _torStepStatus,
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      color: isConnected ? const Color(0xFFC084FC) : Colors.amberAccent,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    textAlign: TextAlign.center,
                   ),
                 ),
               ),
 
+              // کارت آی‌پی خروجی
               _buildConnectionTelemetryCard(isConnected),
 
-              const SizedBox(height: 15),
+              const SizedBox(height: 4),
 
-              Text(
-                _t("tor_mode_select"),
-                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFFC084FC)),
+              // کارت‌های دانلود و آپلود
+              _buildStatsGrid(isConnected, value),
+
+              const SizedBox(height: 20),
+
+              // عنوان انتخاب مسیر تور
+              Row(
+                children: [
+                  const Icon(Icons.route_rounded, size: 16, color: Color(0xFFC084FC)),
+                  const SizedBox(width: 8),
+                  Text(
+                    _t("tor_mode_select"),
+                    style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold, color: Colors.white),
+                  ),
+                ],
               ),
               const SizedBox(height: 12),
 
@@ -3093,6 +4061,7 @@ class _HomePageState extends State<HomePage> {
                 modeKey: "aether_masque",
                 title: _t("tor_mode_aether_masque_title"),
                 desc: _t("tor_mode_aether_masque_desc"),
+                badge: "RECOMMENDED",
                 icon: Icons.shield_rounded,
                 color: const Color(0xFFA855F7),
                 disabled: isConnected || isConnecting,
@@ -3101,32 +4070,36 @@ class _HomePageState extends State<HomePage> {
                 modeKey: "aether_quic",
                 title: _t("tor_mode_aether_quic_title"),
                 desc: _t("tor_mode_aether_quic_desc"),
+                badge: "QUIC SPEED",
                 icon: Icons.flash_on_rounded,
-                color: Colors.cyanAccent,
+                color: const Color(0xFF00F2FE),
                 disabled: isConnected || isConnecting,
               ),
               _buildTorModeOption(
                 modeKey: "snowflake",
                 title: _t("tor_mode_snowflake_title"),
                 desc: _t("tor_mode_snowflake_desc"),
+                badge: "WEBRTC",
                 icon: Icons.ac_unit_rounded,
-                color: Colors.amberAccent,
+                color: const Color(0xFFF59E0B),
                 disabled: isConnected || isConnecting,
               ),
               _buildTorModeOption(
                 modeKey: "direct",
                 title: _t("tor_mode_direct_title"),
                 desc: _t("tor_mode_direct_desc"),
+                badge: "DIRECT",
                 icon: Icons.public_rounded,
-                color: Colors.blueAccent,
+                color: const Color(0xFF38BDF8),
                 disabled: isConnected || isConnecting,
               ),
               _buildTorModeOption(
                 modeKey: "custom",
                 title: _t("tor_mode_custom_title"),
                 desc: _t("tor_mode_custom_desc"),
+                badge: "CUSTOM",
                 icon: Icons.edit_note_rounded,
-                color: Colors.pinkAccent,
+                color: const Color(0xFFEC4899),
                 disabled: isConnected || isConnecting,
               ),
 
@@ -3137,22 +4110,29 @@ class _HomePageState extends State<HomePage> {
                     controller: _customBridgeController,
                     maxLines: 3,
                     enabled: !isConnected && !isConnecting,
+                    style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
                     decoration: InputDecoration(
                       hintText: _t("tor_custom_bridge_hint"),
-                      hintStyle: const TextStyle(fontSize: 12, color: Colors.grey),
+                      hintStyle: const TextStyle(fontSize: 11, color: Colors.grey),
                       filled: true,
-                      fillColor: const Color(0xFF1E293B),
+                      fillColor: const Color(0xFF101726),
                       border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: Color(0xFF9333EA)),
+                        borderRadius: BorderRadius.circular(14),
+                        borderSide: const BorderSide(color: Color(0xFFC084FC)),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        borderSide: BorderSide(color: const Color(0xFFC084FC).withOpacity(0.4)),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        borderSide: const BorderSide(color: Color(0xFFC084FC), width: 1.5),
                       ),
                     ),
                   ),
                 ),
 
-              const SizedBox(height: 15),
-              _buildStatsGrid(isConnected, value),
-              const SizedBox(height: 15),
+              const SizedBox(height: 20),
             ],
           ),
         );
@@ -3169,26 +4149,30 @@ class _HomePageState extends State<HomePage> {
     return Row(
       children: [
         if (isDone)
-          const Icon(Icons.check_circle_rounded, color: Color(0xFF10B981), size: 18)
+          Container(
+            padding: const EdgeInsets.all(3),
+            decoration: const BoxDecoration(color: Color(0xFF10B981), shape: BoxShape.circle),
+            child: const Icon(Icons.check, color: Colors.black, size: 12),
+          )
         else if (isActive)
           const SizedBox(
-            width: 16,
-            height: 16,
-            child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFF59E0B)),
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2.2, color: Color(0xFFF59E0B)),
           )
         else
           CircleAvatar(
-            radius: 8,
-            backgroundColor: Colors.white24,
-            child: Text("$stepNumber", style: const TextStyle(fontSize: 10, color: Colors.white70)),
+            radius: 9,
+            backgroundColor: Colors.white12,
+            child: Text("$stepNumber", style: const TextStyle(fontSize: 10, color: Colors.white70, fontWeight: FontWeight.bold)),
           ),
-        const SizedBox(width: 10),
+        const SizedBox(width: 12),
         Expanded(
           child: Text(
             title,
             style: TextStyle(
               fontSize: 12,
-              fontWeight: (isDone || isActive) ? FontWeight.bold : FontWeight.normal,
+              fontWeight: (isDone || isActive) ? FontWeight.bold : FontWeight.w500,
               color: isDone
                   ? const Color(0xFF10B981)
                   : isActive
@@ -3205,6 +4189,7 @@ class _HomePageState extends State<HomePage> {
     required String modeKey,
     required String title,
     required String desc,
+    required String badge,
     required IconData icon,
     required Color color,
     required bool disabled,
@@ -3214,53 +4199,82 @@ class _HomePageState extends State<HomePage> {
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       child: Material(
-        color: isSelected
-            ? color.withOpacity(0.12)
-            : Theme.of(context).colorScheme.surface,
+        color: isSelected ? const Color(0xFF101726) : const Color(0xFF0E1422),
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(16),
           side: BorderSide(
-            color: isSelected ? color : Colors.grey.withOpacity(0.15),
-            width: isSelected ? 1.8 : 1.0,
+            color: isSelected ? color : Colors.white10,
+            width: isSelected ? 1.5 : 1.0,
           ),
         ),
-        child: ListTile(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          enabled: !disabled,
-          onTap: () {
-            setState(() {
-              _selectedTorMode = modeKey;
-            });
-          },
-          leading: CircleAvatar(
-            backgroundColor: color.withOpacity(0.15),
-            child: Icon(icon, color: color, size: 22),
-          ),
-          title: Text(
-            title,
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-              color: isSelected ? color : null,
-            ),
-          ),
-          subtitle: Text(
-            desc,
-            style: const TextStyle(fontSize: 11, color: Colors.grey),
-          ),
-          trailing: Radio<String>(
-            value: modeKey,
-            groupValue: _selectedTorMode,
-            activeColor: color,
-            onChanged: disabled
-                ? null
-                : (val) {
-                    if (val != null) {
-                      setState(() {
-                        _selectedTorMode = val;
-                      });
-                    }
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: disabled ? null : () => setState(() => _selectedTorMode = modeKey),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: Row(
+              children: [
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: isSelected ? color.withOpacity(0.16) : Colors.white.withOpacity(0.04),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: isSelected ? color.withOpacity(0.4) : Colors.white10),
+                  ),
+                  child: Icon(icon, color: isSelected ? color : Colors.grey, size: 22),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              title,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                                color: isSelected ? Colors.white : Colors.white70,
+                              ),
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: color.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              badge,
+                              style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: color),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        desc,
+                        style: const TextStyle(fontSize: 10.5, color: Colors.grey),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Radio<String>(
+                  value: modeKey,
+                  groupValue: _selectedTorMode,
+                  activeColor: color,
+                  onChanged: disabled ? null : (val) {
+                    if (val != null) setState(() => _selectedTorMode = val);
                   },
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -3271,6 +4285,7 @@ class _HomePageState extends State<HomePage> {
     required String modeKey,
     required String title,
     required String desc,
+    required String badge,
     required IconData icon,
     required Color color,
     required bool disabled,
@@ -3280,53 +4295,82 @@ class _HomePageState extends State<HomePage> {
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       child: Material(
-        color: isSelected
-            ? color.withOpacity(0.12)
-            : Theme.of(context).colorScheme.surface,
+        color: isSelected ? const Color(0xFF101726) : const Color(0xFF0E1422),
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(16),
           side: BorderSide(
-            color: isSelected ? color : Colors.grey.withOpacity(0.15),
-            width: isSelected ? 1.8 : 1.0,
+            color: isSelected ? color : Colors.white10,
+            width: isSelected ? 1.5 : 1.0,
           ),
         ),
-        child: ListTile(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          enabled: !disabled,
-          onTap: () {
-            setState(() {
-              _selectedAetherMode = modeKey;
-            });
-          },
-          leading: CircleAvatar(
-            backgroundColor: color.withOpacity(0.15),
-            child: Icon(icon, color: color, size: 22),
-          ),
-          title: Text(
-            title,
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-              color: isSelected ? color : null,
-            ),
-          ),
-          subtitle: Text(
-            desc,
-            style: const TextStyle(fontSize: 11, color: Colors.grey),
-          ),
-          trailing: Radio<String>(
-            value: modeKey,
-            groupValue: _selectedAetherMode,
-            activeColor: color,
-            onChanged: disabled
-                ? null
-                : (val) {
-                    if (val != null) {
-                      setState(() {
-                        _selectedAetherMode = val;
-                      });
-                    }
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: disabled ? null : () => setState(() => _selectedAetherMode = modeKey),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: Row(
+              children: [
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: isSelected ? color.withOpacity(0.16) : Colors.white.withOpacity(0.04),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: isSelected ? color.withOpacity(0.4) : Colors.white10),
+                  ),
+                  child: Icon(icon, color: isSelected ? color : Colors.grey, size: 22),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              title,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                                color: isSelected ? Colors.white : Colors.white70,
+                              ),
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: color.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              badge,
+                              style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: color),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        desc,
+                        style: const TextStyle(fontSize: 10.5, color: Colors.grey),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Radio<String>(
+                  value: modeKey,
+                  groupValue: _selectedAetherMode,
+                  activeColor: color,
+                  onChanged: disabled ? null : (val) {
+                    if (val != null) setState(() => _selectedAetherMode = val);
                   },
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -3334,37 +4378,106 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildStatsGrid(bool isConnected, V2RayStatus value) {
-    return GridView.count(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      crossAxisCount: 2,
-      childAspectRatio: 1.6,
-      crossAxisSpacing: 12,
-      mainAxisSpacing: 12,
+    return Row(
       children: [
-        _buildStatCard(
-          _t("down_speed"),
-          _formatBytes(isConnected ? value.downloadSpeed : 0, isSpeed: true),
-          Icons.arrow_downward,
-          const Color(0xFF10B981),
+        // کارت دانلود
+        Expanded(
+          child: Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF101726),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white10),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF00F2FE).withOpacity(0.12),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: const Color(0xFF00F2FE).withOpacity(0.3)),
+                  ),
+                  child: const Icon(Icons.arrow_downward_rounded, color: Color(0xFF00F2FE), size: 20),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        "Download",
+                        style: TextStyle(fontSize: 10.5, color: Colors.grey, fontWeight: FontWeight.w500),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        _formatBytes(isConnected ? value.downloadSpeed : 0, isSpeed: true),
+                        style: const TextStyle(
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                          letterSpacing: 0.5,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
-        _buildStatCard(
-          _t("up_speed"),
-          _formatBytes(isConnected ? value.uploadSpeed : 0, isSpeed: true),
-          Icons.arrow_upward,
-          const Color(0xFF3B82F6),
-        ),
-        _buildStatCard(
-          _t("total_down"),
-          _formatBytes(isConnected ? value.download : 0),
-          Icons.cloud_download,
-          Colors.blueGrey,
-        ),
-        _buildStatCard(
-          _t("total_up"),
-          _formatBytes(isConnected ? value.upload : 0),
-          Icons.cloud_upload,
-          Colors.blueGrey,
+        const SizedBox(width: 12),
+        // کارت آپلود
+        Expanded(
+          child: Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF101726),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white10),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF59E0B).withOpacity(0.12),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: const Color(0xFFF59E0B).withOpacity(0.3)),
+                  ),
+                  child: const Icon(Icons.arrow_upward_rounded, color: Color(0xFFF59E0B), size: 20),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        "Upload",
+                        style: TextStyle(fontSize: 10.5, color: Colors.grey, fontWeight: FontWeight.w500),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        _formatBytes(isConnected ? value.uploadSpeed : 0, isSpeed: true),
+                        style: const TextStyle(
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                          letterSpacing: 0.5,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ],
     );
@@ -3614,6 +4727,87 @@ class _HomePageState extends State<HomePage> {
               ),
             ),
           ),
+          const SizedBox(height: 15),
+
+          // بخش ارتباط، کانال تلگرام و حمایت مالی
+          Card(
+            color: Theme.of(context).colorScheme.surface,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _t("contact_title"),
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => _launchURL(telegramChannelUrl),
+                          style: OutlinedButton.styleFrom(
+                            side: const BorderSide(color: Color(0xFF229ED9)),
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                          icon: const Icon(Icons.send_rounded, size: 16, color: Color(0xFF229ED9)),
+                          label: Text(_t("contact_telegram"), style: const TextStyle(fontSize: 11, color: Color(0xFF229ED9))),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: _openDonationDialog,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.amber.shade700,
+                            foregroundColor: Colors.black,
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                          icon: const Icon(Icons.favorite_rounded, size: 16),
+                          label: Text(_t("contact_donate"), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 15),
+
+          // بخش بیانیه حریم خصوصی
+          Card(
+            color: Theme.of(context).colorScheme.surface,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.shield_outlined, color: Theme.of(context).colorScheme.secondary, size: 20),
+                      const SizedBox(width: 8),
+                      Text(
+                        _t("privacy_title"),
+                        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    _t("privacy_text"),
+                    style: const TextStyle(fontSize: 12, height: 1.5, color: Colors.white60),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
         ],
       ),
     );
@@ -3724,38 +4918,7 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildStatCard(String title, String value, IconData icon, Color color) {
-    return Card(
-      color: const Color(0xFF1E293B),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(12.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(fontSize: 11, color: Colors.grey),
-                ),
-                Icon(icon, size: 16, color: color),
-              ],
-            ),
-            Text(
-              value,
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  
 }
 
 class LogsScreen extends StatefulWidget {

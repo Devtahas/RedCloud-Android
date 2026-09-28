@@ -1,0 +1,13 @@
+device_id = "bf3f135c-c4f3-4994-8d01-9267b1cae05e"
+access_token = "efd30d45-9bb8-4afc-a8ba-8a357f1b3a8b"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:86f7:e655:8c76:e0fd:9ec3"
+wg_private_key = "SMw32++CPMGLTRVasPgmz5YE38a03ZuTLvC+JBzJcUI="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "CfMd"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.8"

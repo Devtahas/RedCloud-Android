@@ -1,0 +1,13 @@
+device_id = "936a5224-5899-452e-a559-6473fda433de"
+access_token = "ac39eb7c-1028-4bdc-aad0-8347e9644a3c"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8131:bc20:13c9:4760:8899"
+wg_private_key = "qGyupkS3wf15XAXxXoyIa6SX5E9ObNF2PeFq1G49UHk="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "ECJ/"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.9"

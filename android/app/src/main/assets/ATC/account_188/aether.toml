@@ -1,0 +1,13 @@
+device_id = "6c3d25f1-3c25-4ce2-9a4c-4fd142cfea35"
+access_token = "a8d19f51-94f8-491e-b120-aa65ff2e86c5"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:87e5:7756:fd89:145:d957"
+wg_private_key = "GJKgG4Vw0/gb0u04AUOq+G77xNY4dlAyRCoiulcFO1A="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "lhTy"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.5"

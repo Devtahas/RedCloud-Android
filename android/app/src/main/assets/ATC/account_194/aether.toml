@@ -1,0 +1,13 @@
+device_id = "863862fc-5d6b-441a-a6cf-b50395779406"
+access_token = "283289f5-740b-4116-8eb1-c0dea1d3dbf6"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8a8c:beba:458a:b77b:780e"
+wg_private_key = "CDywany5cy+2japZ5+MEAefEv/T96yXGH3tdEBs0enk="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "NUrk"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.3"

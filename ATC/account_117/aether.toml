@@ -1,0 +1,13 @@
+device_id = "b155c800-52a4-4421-a714-820fb5ce42e5"
+access_token = "9ec6a4cc-78b3-4fdb-945d-2f4022c61c77"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8a4b:645f:f739:1117:5a52"
+wg_private_key = "kCzhBOVAqPtzcGTwGYQIaMR+vvpIqWgmAWUgJkKDqUY="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "Atmj"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.7"

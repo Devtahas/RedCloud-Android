@@ -1,0 +1,27 @@
+device_id = "b3d7102d-cb10-4936-8004-64c6069d8356"
+access_token = "d2b218c6-792e-4515-adb5-9634ac5a112b"
+cert_pem = """
+-----BEGIN CERTIFICATE-----
+MIHsMIGToAMCAQICAQAwCgYIKoZIzj0EAwIwADAeFw0yNjA5MjgxMjAzMzRaFw0y
+NzA5MjgxMjAzMzRaMAAwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAREKhoqCDZ5
+PfYXb1jlhetpr0oAEV/1UXCbYI2y0eP6hJmzmJocKhrffcoJ+Enx4tUCJ3t7CFxM
+KGecMIrEHsz3MAoGCCqGSM49BAMCA0gAMEUCIQC3VzIcB59mhyjxJ9ftsKMGsPC3
+wPMmvbYsEpU7Mx0GNAIgQK39pSK23a4FzASF8Goy+L+ptnUH11FeuZgqLh8RL5M=
+-----END CERTIFICATE-----
+"""
+key_pem = """
+-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgjp1yTqqAZkKa4B3m
+qb79yCSIOZT6UjXbD3DflnJvKoehRANCAAREKhoqCDZ5PfYXb1jlhetpr0oAEV/1
+UXCbYI2y0eP6hJmzmJocKhrffcoJ+Enx4tUCJ3t7CFxMKGecMIrEHsz3
+-----END PRIVATE KEY-----
+"""
+cert_issued_at = 1790597016
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8d23:f33a:5fd5:f4e6:f81d"
+wg_private_key = "CH2QZH864JebYsDVDbMDFtnWxx26MH8+lE357ov03ns="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "sCtv"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.10"

@@ -1,0 +1,13 @@
+device_id = "822ca12b-d5d1-4540-b1a2-2b192c93e3dc"
+access_token = "087d3f33-b493-413c-b80c-649ef40ff88c"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8b83:35ee:7f40:f9fa:d1a2"
+wg_private_key = "wEpPi7rpfX3wv3LXGUkENEauVWxp2TVS2em1JsIdX2A="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "Hizt"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.10"

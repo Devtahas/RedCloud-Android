@@ -1,0 +1,13 @@
+device_id = "073ab606-069f-44ec-a843-bc37c09ce516"
+access_token = "072be16e-a5a2-4b7e-8eae-6ee716848f88"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:879b:32af:e8c5:b862:154d"
+wg_private_key = "+IVxGTUC1rSgt2CdDlzNNPG2gWIGM435CX72vK7ri0U="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "KCPH"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.5"

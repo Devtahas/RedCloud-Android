@@ -1,0 +1,13 @@
+device_id = "3c019d1d-4049-4e8b-942f-7c64ed847534"
+access_token = "8bd6542a-6f2a-48f8-ac2c-4389b781fa04"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8721:165a:3f7:ebdc:40d1"
+wg_private_key = "EGBlLZcTJB3FkCTGtHm0vziY6wHA6bFbXZMOqPQ4Ink="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "cfma"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.7"

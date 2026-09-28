@@ -1,0 +1,13 @@
+device_id = "76e53ecb-5fe1-4ac6-a59d-deff1411b1fb"
+access_token = "dc2c3ff9-dc1a-401c-8834-3aae899f4a14"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8a43:dfdc:3aa0:d934:165d"
+wg_private_key = "uLIFU5ueq7GqA7lGICWfrmGX6atEQYH9cvz7ubN2UW8="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "KDSd"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.5"

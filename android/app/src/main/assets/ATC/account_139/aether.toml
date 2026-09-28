@@ -1,0 +1,13 @@
+device_id = "2fbbcc33-7baa-460d-8596-5f6f910d3b95"
+access_token = "6bb34c4c-3b3d-477e-a439-49e7e07238cd"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:87b9:c177:56f9:e3eb:a8f"
+wg_private_key = "SEdNp7+NUmtFZxWVfdVSY9K2PknWKiFF35UNIV4HB3w="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "CcAG"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.10"

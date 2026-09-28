@@ -1,0 +1,27 @@
+device_id = "33e7312a-268f-4900-b08c-f176efbdccf9"
+access_token = "ff7e386c-da1a-47bf-b508-11e83e4e0350"
+cert_pem = """
+-----BEGIN CERTIFICATE-----
+MIHsMIGToAMCAQICAQAwCgYIKoZIzj0EAwIwADAeFw0yNjA5MjgxMTM5NTlaFw0y
+NzA5MjgxMTM5NTlaMAAwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAQisZKuXe+b
+abU1wKvpzVZMHwcPtbw9Gjsn/TB04odn6wr0VfkeJs2sbXdfzgGUgULZ4ZnCF/77
+6h4zlQbMX8nOMAoGCCqGSM49BAMCA0gAMEUCICiJ5kXstkzwQwLg40+jmfnll75O
+jfsV8qHh6HBQn/wXAiEA1NyzTE5M+HC7WdjeIlwNxqh3nejB+u6E98bt5jRnxbk=
+-----END CERTIFICATE-----
+"""
+key_pem = """
+-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgVyYHz5rdlrREFUPn
+MHT+aeIe7aiWqQV7sKSo9uhLJ0ihRANCAAQisZKuXe+babU1wKvpzVZMHwcPtbw9
+Gjsn/TB04odn6wr0VfkeJs2sbXdfzgGUgULZ4ZnCF/776h4zlQbMX8nO
+-----END PRIVATE KEY-----
+"""
+cert_issued_at = 1790595601
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8842:a2b5:9e40:acfc:c70c"
+wg_private_key = "0CXUe2GadhQZ2DHPh7eoddvTnGIcuoO/9GQ3BqyRdUc="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "ktep"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.2"

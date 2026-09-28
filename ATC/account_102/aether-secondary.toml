@@ -1,0 +1,13 @@
+device_id = "7968d1c2-94da-4196-a0e1-a92b199f5614"
+access_token = "78f16794-510a-4058-a531-2c9508c1c493"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:80b3:e428:30f4:a196:105a"
+wg_private_key = "sLt45cCPTe2furQMHzxLmJLU8XEOOo/KvYi9EfMWj0Q="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "cili"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.6"

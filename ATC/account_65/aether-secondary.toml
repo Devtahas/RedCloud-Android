@@ -1,0 +1,13 @@
+device_id = "e5bed463-a2ef-4578-80d0-30e9e3912ca5"
+access_token = "6e2cbc22-1645-42c1-9d0f-f615577f176e"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:88d5:f719:d84f:18fa:df5c"
+wg_private_key = "AIMZ2pDNobahaO+g7V/I/wLfKKvIHavG3iSfgkdrJFY="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "gdpS"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.10"

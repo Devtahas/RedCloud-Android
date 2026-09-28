@@ -1,0 +1,13 @@
+device_id = "74178011-9d45-47e3-b3e6-d1617a2883c5"
+access_token = "17bb3d7d-90f3-46d4-8ecb-30bd3a326fde"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:854a:8679:97d2:435:249"
+wg_private_key = "+JGnXtTwV78+fOdP8Twz3nd9CQmTApb54tF3aHfJGEY="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "eFda"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.8"

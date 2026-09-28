@@ -1,0 +1,13 @@
+device_id = "c1d329b2-f001-45ad-bdf7-41c8bbb9fca6"
+access_token = "9d207f7d-7866-4c3c-9952-bba1f991ac09"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8418:19e4:c6aa:3ddd:4d5c"
+wg_private_key = "IH8XBSEqwoX027pt2CEZSEn0Tj765Oozq4Df8wNtEH4="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "uzbn"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.3"

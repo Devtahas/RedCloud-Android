@@ -1,0 +1,13 @@
+device_id = "16f46436-4fbc-4487-97e0-6937d67eaca5"
+access_token = "8439845c-4b49-478a-9ace-e1ee6be33bf0"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8510:4727:ffbc:2820:4652"
+wg_private_key = "cPos/tldXd/ZI/CqnLHgsnf+O87A68+SBI8cM4CwOls="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "UpoZ"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.7"

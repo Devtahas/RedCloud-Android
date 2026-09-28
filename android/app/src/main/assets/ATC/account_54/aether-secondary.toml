@@ -1,0 +1,13 @@
+device_id = "d02d0d7c-9def-4653-a608-de73647bdfeb"
+access_token = "d2a384b3-cf2c-4cf5-8e81-6ddf62d8e48e"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:877a:d1d9:6b41:26c6:debe"
+wg_private_key = "CNHIiSHFZlpKygkI9QVonlwbidO2u/zzYykR2pZ+Kmw="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "RHMK"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.8"

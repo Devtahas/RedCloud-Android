@@ -1,0 +1,13 @@
+device_id = "457c7fa1-7fda-4a0e-a6b4-b1a64552fa74"
+access_token = "c0755568-eb44-42b7-9928-f903cd1e20a3"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8755:8b45:96f8:eea1:7c2f"
+wg_private_key = "gLu/tb07qQDC7n8fySmOGZR8p8L7Uak47D4f4A3XpHg="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "VFMz"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.6"

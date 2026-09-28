@@ -1,0 +1,13 @@
+device_id = "d2317a6a-70dd-410b-a5c7-446c846cd046"
+access_token = "569c9300-e836-4e0b-bb15-d8589a73ba57"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:805a:bb7b:db85:6d1f:6399"
+wg_private_key = "oKj7bkRyVVf8peYvw+KWw1O5WLWboz8FgZogUk3XPWg="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "VaOD"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.9"

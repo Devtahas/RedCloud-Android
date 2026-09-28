@@ -1,0 +1,13 @@
+device_id = "7765c9da-f57d-4af8-b417-0de7cc33dcf8"
+access_token = "ab165f43-e724-45db-be1b-170d4420ed1a"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8bf9:a4ef:306b:1f21:bb04"
+wg_private_key = "2B9xRQgKHZ52FpcxJOK9BbA7an5CgY+iSdw3uVUSQ1w="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "iXla"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.9"

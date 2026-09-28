@@ -6,7 +6,7 @@ plugins {
 android {
     namespace = "com.redcloud.vpn.redcloud_android"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    ndkVersion = "27.0.12077973"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -23,11 +23,17 @@ android {
         versionName = flutter.versionName
     }
 
-    // اتصال پوشه jniLibs برای بسته‌بندی کتابخانه‌های بومی هسته Aether و V2Ray
+    // اتصال پوشه jniLibs و assets برای بسته‌بندی کتابخانه‌های بومی و استخر کلیدهای ATC
     sourceSets {
         getByName("main") {
             jniLibs.srcDirs("src/main/jniLibs")
+            assets.srcDirs("src/main/assets")
         }
+    }
+
+    // ممانعت از فشرده‌سازی فایل‌های کانفیگ بدون پسوند و فایل‌های TOML استخر کلید
+    androidResources {
+        noCompress += listOf("toml", "")
     }
 
     buildTypes {

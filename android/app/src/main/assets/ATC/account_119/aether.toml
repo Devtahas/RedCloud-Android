@@ -1,0 +1,13 @@
+device_id = "cc27595d-5c55-41d9-aa2d-51103d1c0497"
+access_token = "70c64edd-8ce0-4100-a1ae-c2de4c06f989"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:863c:ba25:c18a:7fd1:252b"
+wg_private_key = "YFI5Ez6K4E4V4oLNowiBXeqKWrZ9hi1UBpk3cA5C5WE="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "PYki"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.10"

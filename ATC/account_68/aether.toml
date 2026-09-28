@@ -1,0 +1,13 @@
+device_id = "a229be59-c8ec-43ad-8d49-422388e25cbc"
+access_token = "cf7557d4-787b-430d-bea1-20d9e67d877b"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:837e:bdbd:4e9e:b3:14aa"
+wg_private_key = "oKgGCKRY61wS4M+jJs/QNcLscmibwj3lOCM4Fjio6G8="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "sfTG"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.8"

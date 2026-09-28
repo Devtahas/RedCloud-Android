@@ -1,0 +1,13 @@
+device_id = "6948d357-d374-418f-9216-10aa39b54917"
+access_token = "00669b02-a40f-4603-a55a-ceb751047ddd"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8902:91d7:69df:c724:94d1"
+wg_private_key = "OF3abSqc3X0Gr+5Mupkf5SzqVMhb1Ise+DB4Zu9jiUY="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "nzfa"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.8"

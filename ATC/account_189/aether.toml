@@ -1,0 +1,13 @@
+device_id = "4c8447b8-a88d-4ac4-aa45-ca1e3aa77dfe"
+access_token = "62b96dec-f5da-4d30-a4fc-d006362596c7"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8754:4bd2:fea:ec7f:47dc"
+wg_private_key = "uAeZoOLfwMZhPcKl5wHklblmGMhf1tDaDeD4OcMSNls="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "/WHF"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.8"

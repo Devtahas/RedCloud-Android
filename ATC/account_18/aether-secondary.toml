@@ -1,0 +1,13 @@
+device_id = "a5b5fc54-fe4e-472c-86d0-91bba0849cf1"
+access_token = "0e7567be-0efa-4b6d-8728-ddbe53f14935"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8e35:db2c:19a4:2422:109f"
+wg_private_key = "INSLzThQQ9Z4fFEKKhwofhwYztDciWIsieR9DgXI5Vc="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "AMKa"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.4"

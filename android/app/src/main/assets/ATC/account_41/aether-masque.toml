@@ -1,0 +1,27 @@
+device_id = "e9117f4a-433e-421e-b3a3-f73ed7d87a48"
+access_token = "9f80086b-a439-4cb1-b3dd-72ccc4cd3ce3"
+cert_pem = """
+-----BEGIN CERTIFICATE-----
+MIHrMIGToAMCAQICAQAwCgYIKoZIzj0EAwIwADAeFw0yNjA5MjgxMDE4NTRaFw0y
+NzA5MjgxMDE4NTRaMAAwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASC/7sc4PVv
+vSKURlyfmLUasaep+ZKC9qtSgK2gLFpUMfxINPbI895Ua9BZFyMh79xds0C3Z7CO
+UXN8K6x3A/opMAoGCCqGSM49BAMCA0cAMEQCID14I6WSOffIJ2nx0h/ipV6Ft1xn
+GodF7tr4Ok+vGdzHAiBEgXnOGk8iKiwFlQT6JlMXknlFNLC1APDEcBiWQ1vMAw==
+-----END CERTIFICATE-----
+"""
+key_pem = """
+-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgjnHc196Uh33yqo5R
+L7b0rJz4E8H52z2aTfpTVdEunEmhRANCAASC/7sc4PVvvSKURlyfmLUasaep+ZKC
+9qtSgK2gLFpUMfxINPbI895Ua9BZFyMh79xds0C3Z7COUXN8K6x3A/op
+-----END PRIVATE KEY-----
+"""
+cert_issued_at = 1790590736
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:83c0:7e64:a968:2af9:6634"
+wg_private_key = "sE2aGaHM2b2lbIrwQ5VO/8DtpCFiTEnga8u/PCmNlF8="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "MOSs"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.4"

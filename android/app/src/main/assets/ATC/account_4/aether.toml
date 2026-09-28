@@ -1,0 +1,13 @@
+device_id = "e5abac39-23ec-4306-b77b-1eefab397119"
+access_token = "f27b26ea-68ce-4f7e-9423-ee3434ae5718"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8c20:8c11:c7da:9d39:7866"
+wg_private_key = "qCKCkc6LqWbxRZREi+Kpnxmjshsw8onQVLNtNhWzJFE="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "KmtX"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.4"

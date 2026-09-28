@@ -1,0 +1,13 @@
+device_id = "0ba87f05-d564-407a-8b6c-cfb2d9cfca51"
+access_token = "712cbb67-6e93-475b-b35e-54e46a1efb67"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8692:d609:c6e8:623:346f"
+wg_private_key = "8JpYYbmj39/8pnrJ4p/T8u+IAf8Es63GSGa4E9b43mM="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "FUDD"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.9"

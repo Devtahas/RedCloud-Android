@@ -1,0 +1,13 @@
+device_id = "4738415e-6eaa-447c-bd91-c0a6bd65ff7d"
+access_token = "9b0ac6e5-d839-424a-9eb8-9a0ac3c19141"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:883b:ce05:8b51:d209:88e0"
+wg_private_key = "KJ0lx5CFODqXdxQskZmqPPqZBmke5h/hU8TaS28Lrlc="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "bumi"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.5"

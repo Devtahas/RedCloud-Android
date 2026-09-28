@@ -1,0 +1,13 @@
+device_id = "dd60a69a-01f9-4b9e-b6b7-2f31280f2eee"
+access_token = "e9c39b8c-286d-4516-a843-a969179dbec5"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:88a7:3bc:11ff:5849:5e8"
+wg_private_key = "UOyAP7zancf7JcdG2ECCPZ/Rh9QVs6fmdnOROm9N5Hk="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "eblx"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.5"
