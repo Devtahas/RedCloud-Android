@@ -55,6 +55,15 @@ jobs:
           mkdir -p assets/tor
           curl -sL "https://gitlab.torproject.org/tpo/core/tor/-/raw/main/src/config/geoip" -o assets/tor/geoip
           curl -sL "https://gitlab.torproject.org/tpo/core/tor/-/raw/main/src/config/geoip6" -o assets/tor/geoip6
+
+          echo "[*] Stripping debug symbols to reduce APK size..."
+          STRIP_TOOL=$(find $ANDROID_SDK_ROOT/ndk -name "llvm-strip" 2>/dev/null | head -n 1)
+          if [ -z "$STRIP_TOOL" ]; then
+            STRIP_TOOL="llvm-strip"
+          fi
+          echo "[*] Using strip tool: $STRIP_TOOL"
+          find android/app/src/main/jniLibs -name "*.so" -exec $STRIP_TOOL --strip-unneeded {} + 2>/dev/null || true
+
           ls -la android/app/src/main/jniLibs/
 
       - name: Install Flutter Dependencies

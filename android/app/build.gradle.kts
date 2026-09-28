@@ -31,9 +31,9 @@ android {
         }
     }
 
-    // ممانعت از فشرده‌سازی فایل‌های کانفیگ بدون پسوند و فایل‌های TOML استخر کلید
+    // ممانعت از فشرده‌سازی صرفاً فایل‌های متنی استخر کلید ATC
     androidResources {
-        noCompress += listOf("toml", "")
+        noCompress += listOf("toml", "aether", "aether-masque", "aether-secondary")
     }
 
     buildTypes {

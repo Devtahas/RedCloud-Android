@@ -2716,7 +2716,7 @@ class _HomePageState extends State<HomePage> {
                     ],
                   ),
                   child: const Text(
-                    "v1.2.3",
+                    "v1.2.4",
                     style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.bold,
