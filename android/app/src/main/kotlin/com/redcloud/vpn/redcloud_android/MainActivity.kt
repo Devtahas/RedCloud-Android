@@ -36,6 +36,7 @@ class MainActivity : FlutterActivity() {
         private const val TAG = "RedCloudNative"
         private const val AETHER_CHANNEL = "com.redcloud.vpn/aether_channel"
         private const val TOR_CHANNEL = "com.redcloud.vpn/tor_channel"
+        private const val LAN_CHANNEL = "com.redcloud.vpn/lan_channel"
 
         @Volatile
         var aetherProcess: Process? = null
@@ -377,9 +378,10 @@ class MainActivity : FlutterActivity() {
                     val port = call.argument<Int>("port") ?: 9081
                     val isHybrid = call.argument<Boolean>("isHybrid") ?: true
                     val region = call.argument<String>("region") ?: "CA"
+                    val cdnFronting = call.argument<Boolean>("cdnFronting") ?: false
 
                     thread {
-                        val launched = startPsiphonEngine(port, isHybrid, region)
+                        val launched = startPsiphonEngine(port, isHybrid, region, cdnFronting)
                         runOnUiThread {
                             if (launched) {
                                 acquireWakeLock()
@@ -426,6 +428,60 @@ class MainActivity : FlutterActivity() {
                     result.success(true)
                 }
 
+                else -> result.notImplemented()
+            }
+        }
+
+        // =========================================================================
+        // ۳. کانال متد اشتراک اینترنت محلی و هات‌اسپات (LAN Share & Hotspot Channel)
+        // =========================================================================
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, LAN_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getLocalIp" -> {
+                    result.success(getLocalIpAddress())
+                }
+                "getConnectedClients" -> {
+                    thread {
+                        val clients = getConnectedClients()
+                        runOnUiThread { result.success(clients) }
+                    }
+                }
+                "isRooted" -> {
+                    result.success(isDeviceRooted())
+                }
+                "enableTransparentRouting" -> {
+                    val enable = call.argument<Boolean>("enable") ?: false
+                    thread {
+                        val success = enableTransparentRouting(enable)
+                        runOnUiThread { result.success(success) }
+                    }
+                }
+                "openHotspotSettings" -> {
+                    openHotspotSettings()
+                    result.success(true)
+                }
+                "getInstalledApps" -> {
+                    thread {
+                        val apps = getInstalledAppsList()
+                        runOnUiThread { result.success(apps) }
+                    }
+                }
+                "getDeviceAbi" -> {
+                    val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
+                    result.success(abi)
+                }
+                "getAppCacheDir" -> {
+                    result.success(cacheDir.absolutePath)
+                }
+                "installApk" -> {
+                    val path = call.argument<String>("filePath")
+                    if (path != null) {
+                        val success = installDownloadedApk(path)
+                        result.success(success)
+                    } else {
+                        result.error("INVALID_PATH", "مسیر فایل نامعتبر است", null)
+                    }
+                }
                 else -> result.notImplemented()
             }
         }
@@ -1003,7 +1059,7 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun startPsiphonEngine(port: Int, isHybrid: Boolean, region: String): Boolean {
+    private fun startPsiphonEngine(port: Int, isHybrid: Boolean, region: String, cdnFronting: Boolean = false): Boolean {
         stopPsiphonEngine()
         ensurePortFree(port, 2000)
 
@@ -1019,9 +1075,18 @@ class MainActivity : FlutterActivity() {
         psiphonDir.setExecutable(true, false)
 
         val configFile = File(psiphonDir, "psiphon.config")
-        val egressCode = if (region.isEmpty() || region.uppercase() == "AUTO") "CA" else region.uppercase()
+        
+        // در صورت فعال بودن CDN Fronting، از بین کشورهای پرسرعت مجهز به CDN یکی برگزیده می‌شود
+        val cdnRegions = listOf("DE", "US", "NL", "CA", "GB")
+        val egressCode = if (cdnFronting && (region.isEmpty() || region.uppercase() == "AUTO")) {
+            cdnRegions.random()
+        } else if (region.isEmpty() || region.uppercase() == "AUTO") {
+            "CA"
+        } else {
+            region.uppercase()
+        }
 
-        // کانفیگ کامل و رسمی سایفون همراه با کلید اعتبارسنجی سرورهای کانادا و اتصال به اَتر
+        // کانفیگ کامل و رسمی سایفون همراه با پروتکل‌های ضدسانسور CDN Fronting
         val configJson = JSONObject().apply {
             put("DataRootDirectory", psiphonDir.absolutePath)
             put("LocalSocksProxyPort", port)
@@ -1033,13 +1098,23 @@ class MainActivity : FlutterActivity() {
             put("RemoteServerListUrl", "https://s3.amazonaws.com//psiphon/web/mjr4-p23r-puwl/server_list_compressed")
             put("RemoteServerListSignaturePublicKey", "MIICIDANBgkqhkiG9w0BAQEFAAOCAg0AMIICCAKCAgEAt7Ls+/39r+T6zNW7GiVpJfzq/xvL9SBH5rIFnk0RXYEYavax3WS6HOD35eTAqn8AniOwiH+DOkvgSKF2caqk/y1dfq47Pdymtwzp9ikpB1C5OfAysXzBiwVJlCdajBKvBZDerV1cMvRzCKvKwRmvDmHgphQQ7WfXIGbRbmmk6opMBh3roE42KcotLFtqp0RRwLtcBRNtCdsrVsjiI1Lqz/lH+T61sGjSjQ3CHMuZYSQJZo/KrvzgQXpkaCTdbObxHqb6/+i1qaVOfEsvjoiyzTxJADvSytVtcTjijhPEV6XskJVHE1Zgl+7rATr/pDQkw6DPCNBS1+Y6fy7GstZALQXwEDN/qhQI9kWkHijT8ns+i1vGg00Mk/6J75arLhqcodWsdeG/M/moWgqQAnlZAGVtJI1OgeF5fsPpXu4kctOfuZlGjVZXQNW34aOzm8r8S0eVZitPlbhcPiR4gT/aSMz/wd8lZlzZYsje/Jr8u/YtlwjjreZrGRmG8KMOzukV3lLmMppXFMvl4bxv6YFEmIuTsOhbLTwFgh7KYNjodLj/LsqRVfwz31PgWQFTEPICV7GCvgVlPRxnofqKSjgTWI4mxDhBpVcATvaoBl1L/6WLbFvBsoAUBItWwctO2xalKxF5szhGm8lccoc5MZr8kfE0uxMgsxz4er68iCID+rsCAQM=")
             put("UseIndistinguishableTLS", true)
+            
+            // قفل کردن روی پروتکل‌های دامین فرانتینگ شبکه توزیع محتوا
+            if (cdnFronting) {
+                val frontedProtocols = org.json.JSONArray().apply {
+                    put("FRONTED-MEEK-HTTP")
+                    put("FRONTED-MEEK-OSHM")
+                }
+                put("TunnelProtocols", frontedProtocols)
+            }
+
             if (isHybrid) {
                 put("UpstreamProxyUrl", "socks5://127.0.0.1:1819")
             }
             put("EstablishTunnelTimeoutSeconds", 60)
         }
         configFile.writeText(configJson.toString(2))
-        appendNativeLog("PsiphonConfig", "کانفیگ سایفون ثبت شد: منطقه خروجی: $egressCode | Upstream: ${if (isHybrid) "127.0.0.1:1819" else "Direct"}")
+        appendNativeLog("PsiphonConfig", "کانفیگ سایفون ثبت شد: منطقه خروجی: $egressCode | CDN Fronting: $cdnFronting | Upstream: ${if (isHybrid) "127.0.0.1:1819" else "Direct"}")
 
         val caPath = if (File("/apex/com.android.conscrypt/cacerts").exists()) {
             "/apex/com.android.conscrypt/cacerts"
@@ -1200,6 +1275,231 @@ class MainActivity : FlutterActivity() {
             } catch (_: Exception) {
                 null
             }
+        }
+    }
+
+    /**
+     * سیستم تشخیص خودکار آی‌پی شبکه محلی (LAN / Wi-Fi / Hotspot IP)
+     */
+    private fun getLocalIpAddress(): String {
+        try {
+            val interfaces = java.net.NetworkInterface.getNetworkInterfaces()?.toList() ?: emptyList()
+            // اولویت اول: اینترفیس‌های فعال هات‌اسپات (ap0, wlan1, swlan0, rndis0)
+            for (intf in interfaces) {
+                val name = intf.name.lowercase()
+                if (name.contains("ap") || name.contains("rndis") || name.contains("hotspot")) {
+                    for (addr in intf.inetAddresses) {
+                        if (!addr.isLoopbackAddress && addr is java.net.Inet4Address) {
+                            return addr.hostAddress ?: "192.168.43.1"
+                        }
+                    }
+                }
+            }
+            // اولویت دوم: کارت شبکه وای‌فای معمولی (wlan0)
+            for (intf in interfaces) {
+                val name = intf.name.lowercase()
+                if (name.startsWith("wlan") || name.startsWith("eth")) {
+                    for (addr in intf.inetAddresses) {
+                        if (!addr.isLoopbackAddress && addr is java.net.Inet4Address) {
+                            return addr.hostAddress ?: "192.168.43.1"
+                        }
+                    }
+                }
+            }
+            // اولویت سوم: هر آدرس معتبر IPv4 غیر از لوپ‌بک
+            for (intf in interfaces) {
+                if (intf.name.startsWith("tun") || intf.name.startsWith("dummy")) continue
+                for (addr in intf.inetAddresses) {
+                    if (!addr.isLoopbackAddress && addr is java.net.Inet4Address) {
+                        return addr.hostAddress ?: "192.168.43.1"
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            appendNativeLog("LANError", "خطا در دریافت آی‌پی محلی: ${e.message}")
+        }
+        return "192.168.43.1"
+    }
+
+    /**
+     * اسکن دستگاه‌های متصل تنها در صورت وجود دسترسی روت (جهت ممانعت از ارورهای SELinux)
+     */
+    private fun getConnectedClients(): List<Map<String, String>> {
+        val clients = mutableListOf<Map<String, String>>()
+        if (!isDeviceRooted()) {
+            return clients // در صورتی که گوشی روت نباشد اصلاً کرنل را درگیر نمی‌کند
+        }
+        try {
+            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "ip neigh show"))
+            val reader = BufferedReader(InputStreamReader(process.inputStream))
+            var line: String?
+            while (reader.readLine().also { line = it } != null) {
+                line?.let { l ->
+                    val parts = l.trim().split("\\s+".toRegex())
+                    if (parts.size >= 5 && l.contains("lladdr") && !l.contains("FAILED")) {
+                        val ip = parts[0]
+                        val macIndex = parts.indexOf("lladdr") + 1
+                        if (macIndex < parts.size) {
+                            val mac = parts[macIndex]
+                            val name = "Device (${ip.substringAfterLast('.')})"
+                            clients.add(mapOf("ip" to ip, "mac" to mac.uppercase(), "name" to name))
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+        return clients
+    }
+
+    /**
+     * بررسی دسترسی روت (Root Access) برای هدایت شفاف ترافیک
+     */
+    private fun isDeviceRooted(): Boolean {
+        val paths = arrayOf(
+            "/sbin/su", "/system/bin/su", "/system/xbin/su",
+            "/data/local/xbin/su", "/data/local/bin/su", "/system/sd/xbin/su"
+        )
+        for (path in paths) {
+            if (File(path).exists()) return true
+        }
+        return try {
+            val p = Runtime.getRuntime().exec(arrayOf("which", "su"))
+            val reader = BufferedReader(InputStreamReader(p.inputStream))
+            reader.readLine() != null
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * روتینگ شفاف iptables برای دستگاه‌های روت‌شده (ورود مستقیم و بدون پروکسی دستگاه‌ها به فیلترشکن)
+     */
+    private fun enableTransparentRouting(enable: Boolean): Boolean {
+        if (!isDeviceRooted()) return false
+        return try {
+            val p = Runtime.getRuntime().exec("su")
+            val os = java.io.DataOutputStream(p.outputStream)
+            if (enable) {
+                os.writeBytes("iptables -t nat -A PREROUTING -p tcp -j REDIRECT --to-ports 10808\n")
+                os.writeBytes("iptables -t nat -A PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 53\n")
+                os.writeBytes("sysctl -w net.ipv4.ip_forward=1\n")
+                appendNativeLog("LANRouting", "روتینگ شفاف با موفقیت در کرنل لینوکس فعال شد.")
+            } else {
+                os.writeBytes("iptables -t nat -D PREROUTING -p tcp -j REDIRECT --to-ports 10808 2>/dev/null\n")
+                os.writeBytes("iptables -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 53 2>/dev/null\n")
+                appendNativeLog("LANRouting", "قوانین روتینگ شفاف حذف شدند.")
+            }
+            os.writeBytes("exit\n")
+            os.flush()
+            p.waitFor()
+            true
+        } catch (e: Exception) {
+            appendNativeLog("LANError", "خطا در تنظیم iptables: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * باز کردن مستقیم صفحه تنظیمات هات‌اسپات اندروید
+     */
+    private fun openHotspotSettings() {
+        try {
+            val intent = Intent(Intent.ACTION_MAIN).apply {
+                setClassName("com.android.settings", "com.android.settings.TetherSettings")
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            startActivity(intent)
+        } catch (_: Exception) {
+            try {
+                val intent = Intent(Settings.ACTION_WIRELESS_SETTINGS).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                startActivity(intent)
+            } catch (_: Exception) {}
+        }
+    }
+
+    /**
+     * استخراج لیست کامل برنامه‌های نصب‌شده به همراه نام، پکیج و آیکون فشرده (Base64)
+     */
+    private fun getInstalledAppsList(): List<Map<String, Any>> {
+        val pm = packageManager
+        val appsList = mutableListOf<Map<String, Any>>()
+        try {
+            val packages = pm.getInstalledApplications(android.content.pm.PackageManager.GET_META_DATA)
+            for (appInfo in packages) {
+                if (appInfo.packageName == packageName) continue
+
+                val isSystem = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
+                val label = pm.getApplicationLabel(appInfo).toString()
+                val pkg = appInfo.packageName
+
+                // تبدیل آیکون برنامه به تصویر کوچک 48x48 فشرده
+                var iconBase64 = ""
+                try {
+                    val drawable = pm.getApplicationIcon(appInfo)
+                    val bitmap = if (drawable is android.graphics.drawable.BitmapDrawable && drawable.bitmap != null) {
+                        android.graphics.Bitmap.createScaledBitmap(drawable.bitmap, 48, 48, true)
+                    } else {
+                        val b = android.graphics.Bitmap.createBitmap(48, 48, android.graphics.Bitmap.Config.ARGB_8888)
+                        val canvas = android.graphics.Canvas(b)
+                        drawable.setBounds(0, 0, canvas.width, canvas.height)
+                        drawable.draw(canvas)
+                        b
+                    }
+                    val stream = java.io.ByteArrayOutputStream()
+                    bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 85, stream)
+                    iconBase64 = android.util.Base64.encodeToString(stream.toByteArray(), android.util.Base64.NO_WRAP)
+                } catch (_: Exception) {}
+
+                appsList.add(
+                    mapOf(
+                        "name" to label,
+                        "package" to pkg,
+                        "isSystem" to isSystem,
+                        "icon" to iconBase64
+                    )
+                )
+            }
+            appsList.sortBy { (it["name"] as String).lowercase() }
+        } catch (e: Exception) {
+            appendNativeLog("AppsError", "خطا در استخراج لیست برنامه‌ها: ${e.message}")
+        }
+        return appsList
+    }
+
+    /**
+     * فراخوانی سیستم رسمی PackageInstaller اندروید جهت نصب و آپدیت خودکار APK
+     */
+    private fun installDownloadedApk(apkPath: String): Boolean {
+        try {
+            val file = File(apkPath)
+            if (!file.exists()) {
+                appendNativeLog("Installer", "فایل نصبی یافت نشد: $apkPath")
+                return false
+            }
+
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+            }
+
+            val apkUri: Uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                androidx.core.content.FileProvider.getUriForFile(
+                    applicationContext,
+                    "${packageName}.fileprovider",
+                    file
+                )
+            } else {
+                Uri.fromFile(file)
+            }
+
+            intent.setDataAndType(apkUri, "application/vnd.android.package-archive")
+            startActivity(intent)
+            appendNativeLog("Installer", "صفحه نصب اندروید با موفقیت فراخوانی شد.")
+            return true
+        } catch (e: Exception) {
+            appendNativeLog("InstallerError", "خطا در نصب APK: ${e.message}")
+            return false
         }
     }
 

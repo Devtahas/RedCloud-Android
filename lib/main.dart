@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_v2ray_client/flutter_v2ray.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -205,6 +206,7 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   static const MethodChannel _aetherChannel = MethodChannel('com.redcloud.vpn/aether_channel');
   static const MethodChannel _torChannel = MethodChannel('com.redcloud.vpn/tor_channel');
+  static const MethodChannel _lanChannel = MethodChannel('com.redcloud.vpn/lan_channel');
 
   final ValueNotifier<V2RayStatus> v2rayStatus = ValueNotifier<V2RayStatus>(V2RayStatus());
   
@@ -293,6 +295,7 @@ class _HomePageState extends State<HomePage> {
   int _torCurrentStep = 0;
 
   bool _isPsiphonHybrid = true;
+  bool _isPsiphonCdnFronting = false;
   String _selectedPsiphonCountry = "CA";
   final List<Map<String, String>> _psiphonCountries = [
     {"code": "CA", "name": "Canada 🇨🇦 (کانادا)"},
@@ -858,18 +861,76 @@ class _HomePageState extends State<HomePage> {
     } catch (_) {}
   }
 
+  bool _webrtcShield = true;
+  bool _splitTunnelEnabled = false;
+  String _splitTunnelMode = "bypass"; // "bypass" یا "proxy_only"
+  List<String> _splitTunnelSelectedApps = [];
+  List<String> _allInstalledPackages = [];
+
+  Future<void> _loadSplitTunnelSettings() async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      final bool? enabled = prefs.getBool('split_tunnel_enabled');
+      final String? mode = prefs.getString('split_tunnel_mode');
+      final List<String>? selected = prefs.getStringList('split_tunnel_selected_apps');
+      final List<String>? allPkgs = prefs.getStringList('split_tunnel_all_packages');
+      if (mounted) {
+        setState(() {
+          if (enabled != null) _splitTunnelEnabled = enabled;
+          if (mode != null) _splitTunnelMode = mode;
+          if (selected != null) _splitTunnelSelectedApps = selected;
+          if (allPkgs != null) _allInstalledPackages = allPkgs;
+        });
+      }
+    } catch (_) {}
+  }
+
+  List<String> _getEffectiveBlockedApps() {
+    if (!_splitTunnelEnabled) {
+      return [appPackageName];
+    }
+    if (_splitTunnelMode == "bypass") {
+      // حالت اول: برنامه‌های انتخابی در لیست بلاک قرار می‌گیرند تا بدون فیلترشکن مستقیم باز شوند
+      return [appPackageName, ..._splitTunnelSelectedApps];
+    } else {
+      // حالت دوم: تمام برنامه‌های گوشی به جز موارد انتخابی بلاک می‌شوند تا فقط انتخابی‌ها پروکسی شوند
+      if (_splitTunnelSelectedApps.isEmpty) return [appPackageName];
+      final blocked = _allInstalledPackages
+          .where((pkg) => !_splitTunnelSelectedApps.contains(pkg) && pkg != appPackageName)
+          .toList();
+      return [appPackageName, ...blocked];
+    }
+  }
+
   Future<void> _loadBypassIranSetting() async {
     try {
       final SharedPreferences prefs = await SharedPreferences.getInstance();
       final bool? savedBypass = prefs.getBool('bypass_iran_traffic');
       final bool? savedHybrid = prefs.getBool('hybrid_mode_traffic');
+      final bool? savedShield = prefs.getBool('webrtc_shield_traffic');
       if (mounted) {
         setState(() {
           if (savedBypass != null) _bypassIran = savedBypass;
           if (savedHybrid != null) _isHybridMode = savedHybrid;
+          if (savedShield != null) _webrtcShield = savedShield;
         });
       }
     } catch (_) {}
+  }
+
+  Future<void> _setWebRtcShieldSetting(bool value) async {
+    setState(() {
+      _webrtcShield = value;
+    });
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('webrtc_shield_traffic', value);
+      AppLogger.log("SHIELD", "وضعیت سپر ضد نشت WebRTC: $value");
+    } catch (_) {}
+
+    if (_selectedAccountIndex >= 0 && _selectedAccountIndex < _fetchedAccounts.length) {
+      _updateSelectedConfig();
+    }
   }
 
   Future<void> _setHybridModeSetting(bool value) async {
@@ -944,10 +1005,15 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _initApp() async {
     await _loadBypassIranSetting();
+    await _loadSplitTunnelSettings();
     await _loadExhaustedWorkers();
     await _fetchAndLoadAccounts();
     await _restoreSavedState();
     _fetchAtcInfo();
+    // بررسی خودکار آپدیت جدید از گیت‌هاب در پس‌زمینه
+    Future.delayed(const Duration(seconds: 4), () {
+      if (mounted) _checkForAppUpdate(silent: true);
+    });
 
     _logTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
       try {
@@ -1320,6 +1386,28 @@ class _HomePageState extends State<HomePage> {
       }
     ];
 
+    // سپر ضد نشت WebRTC: هدایت تضمینی پورت‌های STUN/TURN به سرور خروجی جهت انطباق کامل IP
+    if (_webrtcShield) {
+      rules.addAll([
+        {
+          "type": "field",
+          "port": "3478,5349,19302,19305,19307",
+          "network": "udp,tcp",
+          "outboundTag": outboundTag
+        },
+        {
+          "type": "field",
+          "domain": [
+            "domain:stun.l.google.com",
+            "domain:stun.cloudflare.com",
+            "domain:stun.services.mozilla.com",
+            "domain:stunprotocol.org"
+          ],
+          "outboundTag": outboundTag
+        }
+      ]);
+    }
+
     if (_bypassIran) {
       rules.addAll([
         {
@@ -1372,13 +1460,24 @@ class _HomePageState extends State<HomePage> {
         {
           "tag": "socks-in",
           "port": 10808,
-          "listen": "127.0.0.1",
+          "listen": "0.0.0.0",
           "protocol": "socks",
           "sniffing": {
             "enabled": true,
             "destOverride": ["http", "tls"]
           },
           "settings": {"auth": "noauth", "udp": true}
+        },
+        {
+          "tag": "http-in",
+          "port": 10809,
+          "listen": "0.0.0.0",
+          "protocol": "http",
+          "sniffing": {
+            "enabled": true,
+            "destOverride": ["http", "tls"]
+          },
+          "settings": {"timeout": 300}
         }
       ],
       "outbounds": [
@@ -1446,6 +1545,7 @@ class _HomePageState extends State<HomePage> {
         'port': 9081,
         'isHybrid': _isPsiphonHybrid,
         'region': _selectedPsiphonCountry,
+        'cdnFronting': _isPsiphonCdnFronting,
       }) ?? false;
 
       if (!started) {
@@ -1472,7 +1572,7 @@ class _HomePageState extends State<HomePage> {
         flutterV2ray.startV2Ray(
           remark: "Psiphon (${_selectedPsiphonCountry.toUpperCase()})",
           config: psiphonConfig,
-          blockedApps: [appPackageName],
+          blockedApps: _getEffectiveBlockedApps(),
           proxyOnly: false,
           notificationDisconnectButtonName: "DISCONNECT",
         );
@@ -1655,7 +1755,7 @@ class _HomePageState extends State<HomePage> {
         flutterV2ray.startV2Ray(
           remark: "Tor (${_selectedTorMode.toUpperCase()})",
           config: torConfig,
-          blockedApps: [appPackageName],
+          blockedApps: _getEffectiveBlockedApps(),
           proxyOnly: false,
           notificationDisconnectButtonName: "DISCONNECT",
         );
@@ -1738,7 +1838,7 @@ class _HomePageState extends State<HomePage> {
         flutterV2ray.startV2Ray(
           remark: "Aether (${_selectedAetherMode.toUpperCase()})",
           config: aetherConfig,
-          blockedApps: [appPackageName],
+          blockedApps: _getEffectiveBlockedApps(),
           proxyOnly: false,
           notificationDisconnectButtonName: "DISCONNECT",
         );
@@ -1891,7 +1991,7 @@ class _HomePageState extends State<HomePage> {
       flutterV2ray.startV2Ray(
         remark: _remark,
         config: _fullConfigJson,
-        blockedApps: [appPackageName],
+        blockedApps: _getEffectiveBlockedApps(),
         proxyOnly: false,
         notificationDisconnectButtonName: "DISCONNECT",
       );
@@ -1995,12 +2095,12 @@ class _HomePageState extends State<HomePage> {
     try {
       final Map<String, dynamic> configMap = jsonDecode(configText);
       
-      // پورت لوکال ساکس ۵ با UDP فعال
+      // بازگشایی پورت‌های سراسری 0.0.0.0 برای اشتراک اینترنت محلی (LAN Share)
       configMap['inbounds'] = [
         {
           "tag": "socks-in",
           "port": 10808,
-          "listen": "127.0.0.1",
+          "listen": "0.0.0.0",
           "protocol": "socks",
           "sniffing": {
             "enabled": true,
@@ -2009,6 +2109,19 @@ class _HomePageState extends State<HomePage> {
           "settings": {
             "auth": "noauth",
             "udp": true
+          }
+        },
+        {
+          "tag": "http-in",
+          "port": 10809,
+          "listen": "0.0.0.0",
+          "protocol": "http",
+          "sniffing": {
+            "enabled": true,
+            "destOverride": ["http", "tls", "quic"]
+          },
+          "settings": {
+            "timeout": 300
           }
         }
       ];
@@ -2056,6 +2169,28 @@ class _HomePageState extends State<HomePage> {
           "outboundTag": _isHybridMode ? "aether-underlay" : "proxy"
         }
       ];
+
+      // سپر ضد نشت WebRTC: هدایت استعلام‌های STUN به پراکسی جهت هماهنگی کامل IP با سرور
+      if (_webrtcShield) {
+        routingRules.addAll([
+          {
+            "type": "field",
+            "port": "3478,5349,19302,19305,19307",
+            "network": "udp,tcp",
+            "outboundTag": "proxy"
+          },
+          {
+            "type": "field",
+            "domain": [
+              "domain:stun.l.google.com",
+              "domain:stun.cloudflare.com",
+              "domain:stun.services.mozilla.com",
+              "domain:stunprotocol.org"
+            ],
+            "outboundTag": "proxy"
+          }
+        ]);
+      }
 
       if (_bypassIran) {
         routingRules.add({
@@ -2696,11 +2831,23 @@ class _HomePageState extends State<HomePage> {
           backgroundColor: Colors.transparent,
           elevation: 0,
           actions: [
+            IconButton(
+              icon: const Icon(Icons.qr_code_2_rounded, color: Color(0xFF00F2FE), size: 23),
+              tooltip: "LAN Share & QR",
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => LanShareScreen(currentLang: widget.currentLang),
+                  ),
+                );
+              },
+            ),
             Padding(
-              padding: const EdgeInsetsDirectional.only(end: 14.0),
+              padding: const EdgeInsetsDirectional.only(end: 12.0),
               child: Center(
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
                     color: const Color(0xFF00F2FE).withOpacity(0.12),
                     borderRadius: BorderRadius.circular(10),
@@ -2716,7 +2863,7 @@ class _HomePageState extends State<HomePage> {
                     ],
                   ),
                   child: const Text(
-                    "v1.2.4",
+                    "v1.2.5",
                     style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.bold,
@@ -2899,6 +3046,365 @@ class _HomePageState extends State<HomePage> {
       case 5: return _buildPrivacyTab();
       case 6: return _buildContactTab();
       default: return _buildDashboardTab();
+    }
+  }
+
+  // =========================================================================
+  // سیستم آپدیت خودکار درون‌برنامه‌ای از GitHub Releases
+  // =========================================================================
+  static const String _currentVersionTag = "1.2.5";
+
+  bool _isNewerVersion(String remoteVer, String currentVer) {
+    try {
+      final cleanRemote = remoteVer.toLowerCase().replaceAll('v', '').trim();
+      final cleanCurrent = currentVer.toLowerCase().replaceAll('v', '').trim();
+      final remoteParts = cleanRemote.split('.').map((e) => int.tryParse(e) ?? 0).toList();
+      final currentParts = cleanCurrent.split('.').map((e) => int.tryParse(e) ?? 0).toList();
+
+      for (int i = 0; i < 3; i++) {
+        final r = i < remoteParts.length ? remoteParts[i] : 0;
+        final c = i < currentParts.length ? currentParts[i] : 0;
+        if (r > c) return true;
+        if (r < c) return false;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  Future<void> _checkForAppUpdate({bool silent = false}) async {
+    if (!silent) {
+      _showSnackBar(widget.currentLang == "fa" ? "در حال بررسی آخرین نسخه در گیت‌هاب..." : "Checking for updates...");
+    }
+
+    try {
+      final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+      final request = await client.getUrl(Uri.parse("https://api.github.com/repos/Devtahas/RedCloud-Android/releases/latest"));
+      request.headers.set("Accept", "application/vnd.github.v3+json");
+      request.headers.set("User-Agent", "RedCloud-Android-Client");
+      final response = await request.close();
+
+      if (response.statusCode == 200) {
+        final body = await response.transform(utf8.decoder).join();
+        final Map<String, dynamic> release = jsonDecode(body);
+        final String tagName = release["tag_name"]?.toString() ?? "";
+        final String releaseNotes = release["body"]?.toString() ?? "";
+        final List<dynamic> assets = release["assets"] ?? [];
+
+        if (_isNewerVersion(tagName, _currentVersionTag)) {
+          // انتخاب بهینه‌ترین فایل متناسب با معماری پردازنده گوشی
+          String downloadUrl = "";
+          int fileSize = 0;
+          String assetName = "";
+
+          String deviceAbi = "arm64-v8a";
+          try {
+            deviceAbi = await _lanChannel.invokeMethod('getDeviceAbi') ?? "arm64-v8a";
+          } catch (_) {}
+
+          // ۱. ابتدا جستجو برای معماری اختصاصی گوشی (مثلاً arm64-v8a)
+          for (var a in assets) {
+            final name = (a["name"] ?? "").toString().toLowerCase();
+            if (name.contains(deviceAbi.toLowerCase()) && name.endsWith(".apk")) {
+              downloadUrl = a["browser_download_url"] ?? "";
+              fileSize = a["size"] ?? 0;
+              assetName = a["name"] ?? "";
+              break;
+            }
+          }
+
+          // ۲. در غیر این صورت، انتخاب نسخه Universal
+          if (downloadUrl.isEmpty) {
+            for (var a in assets) {
+              final name = (a["name"] ?? "").toString().toLowerCase();
+              if (name.contains("universal") && name.endsWith(".apk")) {
+                downloadUrl = a["browser_download_url"] ?? "";
+                fileSize = a["size"] ?? 0;
+                assetName = a["name"] ?? "";
+                break;
+              }
+            }
+          }
+
+          // ۳. فال‌بک نهایی به اولین فایل apk موجود
+          if (downloadUrl.isEmpty && assets.isNotEmpty) {
+            for (var a in assets) {
+              final name = (a["name"] ?? "").toString();
+              if (name.endsWith(".apk")) {
+                downloadUrl = a["browser_download_url"] ?? "";
+                fileSize = a["size"] ?? 0;
+                assetName = a["name"] ?? "";
+                break;
+              }
+            }
+          }
+
+          if (downloadUrl.isNotEmpty && mounted) {
+            _showUpdateDialog(
+              newVersion: tagName,
+              changelog: releaseNotes,
+              downloadUrl: downloadUrl,
+              fileSize: fileSize,
+              fileName: assetName,
+            );
+          }
+        } else {
+          if (!silent && mounted) {
+            _showSnackBar(widget.currentLang == "fa" ? "شما در حال استفاده از آخرین نسخه هستید ($tagName)." : "You are using the latest version ($tagName).");
+          }
+        }
+      } else {
+        if (!silent && mounted) {
+          _showSnackBar(widget.currentLang == "fa" ? "امکان دریافت اطلاعات آپدیت وجود ندارد." : "Could not fetch update info.");
+        }
+      }
+    } catch (_) {
+      if (!silent && mounted) {
+        _showSnackBar(widget.currentLang == "fa" ? "خطا در اتصال به سرور گیت‌هاب." : "Failed to connect to GitHub.");
+      }
+    }
+  }
+
+  void _showUpdateDialog({
+    required String newVersion,
+    required String changelog,
+    required String downloadUrl,
+    required int fileSize,
+    required String fileName,
+  }) {
+    final isFa = widget.currentLang == "fa";
+    final sizeMb = (fileSize / (1024 * 1024)).toStringAsFixed(1);
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: const Color(0xFF101726),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(22),
+          side: const BorderSide(color: Color(0xFF00F2FE), width: 1.5),
+        ),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF00F2FE).withOpacity(0.15),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.rocket_launch_rounded, color: Color(0xFF00F2FE), size: 24),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    isFa ? "بروزرسانی جدید آمد!" : "New Update Available!",
+                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
+                  ),
+                  Text(
+                    "v$_currentVersionTag  ➔  $newVersion ($sizeMb MB)",
+                    style: const TextStyle(fontSize: 11.5, color: Color(0xFF00F2FE), fontFamily: 'monospace'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              isFa ? "آیا مایلید نسخه جدید را دانلود و نصب کنید؟" : "Would you like to download and install this update?",
+              style: const TextStyle(fontSize: 12.5, color: Colors.white70),
+            ),
+            const SizedBox(height: 12),
+            if (changelog.isNotEmpty) ...[
+              Container(
+                constraints: const BoxConstraints(maxHeight: 140),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF090D16),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white10),
+                ),
+                child: SingleChildScrollView(
+                  child: Text(
+                    changelog,
+                    style: const TextStyle(fontSize: 11, color: Colors.white60, height: 1.5),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx),
+            child: Text(isFa ? "خیر (بعداً)" : "Later", style: const TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.pop(dialogCtx);
+              _startDownloadAndInstall(downloadUrl: downloadUrl, totalBytes: fileSize);
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF00F2FE),
+              foregroundColor: Colors.black,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            ),
+            icon: const Icon(Icons.download_rounded, size: 18),
+            label: Text(
+              isFa ? "بله (دانلود و نصب)" : "Yes (Update Now)",
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _startDownloadAndInstall({required String downloadUrl, required int totalBytes}) async {
+    final isFa = widget.currentLang == "fa";
+    double progress = 0.0;
+    int downloadedBytes = 0;
+    bool isCancelled = false;
+
+    // نمایش مودال پیشرفت دانلود
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (progressCtx) {
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            final percent = (progress * 100).clamp(0, 100).toInt();
+            final currentMb = (downloadedBytes / (1024 * 1024)).toStringAsFixed(1);
+            final totalMb = (totalBytes / (1024 * 1024)).toStringAsFixed(1);
+
+            return AlertDialog(
+              backgroundColor: const Color(0xFF101726),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+                side: const BorderSide(color: Color(0xFF00F2FE), width: 1.2),
+              ),
+              title: Row(
+                children: [
+                  const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2.5, color: Color(0xFF00F2FE)),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    isFa ? "در حال دانلود بروزرسانی..." : "Downloading Update...",
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+                  ),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        "$currentMb MB / $totalMb MB",
+                        style: const TextStyle(fontSize: 11, color: Colors.grey, fontFamily: 'monospace'),
+                      ),
+                      Text(
+                        "$percent%",
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF00F2FE), fontFamily: 'monospace'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: LinearProgressIndicator(
+                      value: progress > 0 ? progress : null,
+                      backgroundColor: Colors.white12,
+                      valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF00F2FE)),
+                      minHeight: 8,
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    isCancelled = true;
+                    Navigator.pop(progressCtx);
+                  },
+                  child: Text(isFa ? "لغو دانلود" : "Cancel", style: const TextStyle(color: Colors.redAccent)),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    // شروع فرآیند دانلود با هندل کردن خودکار ریدایرکت‌های گیت‌هاب به Amazon S3
+    try {
+      final String cacheDir = await _lanChannel.invokeMethod('getAppCacheDir') ?? "";
+      final saveFile = File("$cacheDir/update.apk");
+      if (await saveFile.exists()) await saveFile.delete();
+
+      final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
+      final request = await client.getUrl(Uri.parse(downloadUrl));
+      request.followRedirects = true;
+      request.headers.set("User-Agent", "RedCloud-Android-Client");
+      final response = await request.close();
+
+      if (response.statusCode == 200) {
+        final sink = saveFile.openWrite();
+        final effectiveTotal = response.contentLength > 0 ? response.contentLength : totalBytes;
+
+        response.listen(
+          (chunk) {
+            if (isCancelled) {
+              sink.close();
+              saveFile.delete();
+              return;
+            }
+            downloadedBytes += chunk.length;
+            sink.add(chunk);
+            if (effectiveTotal > 0) {
+              progress = (downloadedBytes / effectiveTotal).clamp(0.0, 1.0);
+            }
+          },
+          onDone: () async {
+            await sink.flush();
+            await sink.close();
+            if (isCancelled) return;
+
+            // بستن پنجره دانلود
+            if (mounted && Navigator.canPop(context)) {
+              Navigator.pop(context);
+            }
+
+            _showSnackBar(isFa ? "دانلود با موفقیت انجام شد! در حال باز کردن نصاب..." : "Download completed! Launching installer...");
+
+            // فراخوانی صفحهٔ رسمی نصب اندروید
+            await _lanChannel.invokeMethod('installApk', {'filePath': saveFile.path});
+          },
+          onError: (e) {
+            sink.close();
+            if (mounted && Navigator.canPop(context)) Navigator.pop(context);
+            _showSnackBar(isFa ? "خطا در دانلود فایل آپدیت: $e" : "Download failed: $e");
+          },
+          cancelOnError: true,
+        );
+      } else {
+        if (mounted && Navigator.canPop(context)) Navigator.pop(context);
+        _showSnackBar(isFa ? "خطای سرور دانلود (کد ${response.statusCode})" : "Server error (${response.statusCode})");
+      }
+    } catch (e) {
+      if (mounted && Navigator.canPop(context)) Navigator.pop(context);
+      _showSnackBar(isFa ? "خطا در دانلود: $e" : "Error: $e");
     }
   }
 
@@ -3090,9 +3596,23 @@ class _HomePageState extends State<HomePage> {
                             ),
                     ),
                     IconButton(
-                      icon: const Icon(Icons.add_link_rounded, color: Color(0xFF00F2FE), size: 18),
-                      tooltip: "ورود دستی کانفیگ",
-                      onPressed: _openConfigBottomSheet,
+                      icon: const Icon(Icons.tune_rounded, color: Color(0xFF00F2FE), size: 19),
+                      tooltip: "مدیریت سرورها و سابسکریپشن",
+                      onPressed: () async {
+                        final selectedConfig = await Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => ServersManagementScreen(
+                              currentLang: widget.currentLang,
+                              currentServers: _fetchedAccounts,
+                            ),
+                          ),
+                        );
+                        if (selectedConfig != null && selectedConfig is Map<String, dynamic>) {
+                          _parseAndSaveConfig(selectedConfig['rawLink'] ?? '', updateUI: true);
+                          _showSnackBar("سرور '${selectedConfig['name']}' فعال شد.");
+                        }
+                      },
                     ),
                     IconButton(
                       icon: const Icon(Icons.sync_rounded, color: Color(0xFF00F2FE), size: 18),
@@ -3593,6 +4113,122 @@ class _HomePageState extends State<HomePage> {
               ),
 
               const SizedBox(height: 14),
+
+              // باکس اختصاصی Advanced Engine (CDN Fronting) - واکنش‌گرا و بدون سرریز
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF101726),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: _isPsiphonCdnFronting ? const Color(0xFF10B981) : Colors.white10,
+                    width: _isPsiphonCdnFronting ? 1.4 : 1.0,
+                  ),
+                  boxShadow: [
+                    if (_isPsiphonCdnFronting)
+                      BoxShadow(
+                        color: const Color(0xFF10B981).withOpacity(0.15),
+                        blurRadius: 15,
+                      )
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(7),
+                      decoration: BoxDecoration(
+                        color: _isPsiphonCdnFronting 
+                            ? const Color(0xFF10B981).withOpacity(0.18) 
+                            : Colors.white.withOpacity(0.05),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        Icons.cloud_sync_rounded, 
+                        color: _isPsiphonCdnFronting ? const Color(0xFF10B981) : Colors.grey, 
+                        size: 20,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  "Advanced Engine (CDN Fronting)",
+                                  style: TextStyle(
+                                    fontSize: 11.5,
+                                    fontWeight: FontWeight.bold,
+                                    color: _isPsiphonCdnFronting ? Colors.white : Colors.white70,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              if (_isPsiphonCdnFronting) ...[
+                                const SizedBox(width: 4),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF10B981).withOpacity(0.2),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: const Text(
+                                    "FRONTED",
+                                    style: TextStyle(fontSize: 8, fontWeight: FontWeight.bold, color: Color(0xFF10B981)),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            _isPsiphonCdnFronting
+                                ? "Auto: $_selectedPsiphonCountry (Fastly/CloudFront)"
+                                : "Standard Direct Connection",
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: _isPsiphonCdnFronting ? const Color(0xFF10B981) : Colors.grey,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Transform.scale(
+                      scale: 0.75,
+                      child: Switch(
+                        value: _isPsiphonCdnFronting,
+                        activeColor: const Color(0xFF10B981),
+                        activeTrackColor: const Color(0xFF10B981).withOpacity(0.3),
+                        onChanged: (isConnected || isConnecting)
+                            ? null
+                            : (val) {
+                                setState(() {
+                                  _isPsiphonCdnFronting = val;
+                                  if (val) {
+                                    // انتخاب خودکار یکی از بهترین کشورهای آماده CDN Fronting
+                                    final cdnSupported = ["DE", "US", "NL", "CA", "GB"];
+                                    if (!cdnSupported.contains(_selectedPsiphonCountry)) {
+                                      _selectedPsiphonCountry = (cdnSupported..shuffle()).first;
+                                    }
+                                  }
+                                });
+                                if (val) {
+                                  _showSnackBar("حالت CDN Fronting فعال شد (کشور خودکار: $_selectedPsiphonCountry)");
+                                }
+                              },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 12),
 
               // باکس انتخاب کشور خروجی (Exit Node Country)
               Container(
@@ -4544,6 +5180,254 @@ class _HomePageState extends State<HomePage> {
               ),
             ),
           ),
+          const SizedBox(height: 12),
+
+          // کارت اختصاصی سپر ضد نشت WebRTC و امنیت موقعیت
+          Card(
+            color: Theme.of(context).colorScheme.surface,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: BorderSide(
+                color: _webrtcShield ? const Color(0xFF00F2FE) : Colors.grey.withOpacity(0.2),
+                width: 1.2,
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    backgroundColor: _webrtcShield 
+                        ? const Color(0xFF00F2FE).withOpacity(0.15) 
+                        : Colors.grey.withOpacity(0.15),
+                    child: Icon(
+                      Icons.shield_rounded, 
+                      color: _webrtcShield ? const Color(0xFF00F2FE) : Colors.grey, 
+                      size: 22,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.currentLang == "fa" ? "سپر ضد نشت WebRTC (Anti-Leak)" : "WebRTC Anti-Leak Shield",
+                          style: TextStyle(
+                            fontSize: 14, 
+                            fontWeight: FontWeight.bold,
+                            color: _webrtcShield ? const Color(0xFF00F2FE) : null,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          widget.currentLang == "fa" 
+                              ? "مسدودسازی پورت‌های STUN و ممانعت از لو رفتن لوکیشن ایران در مرورگرها" 
+                              : "Blocks STUN/TURN discovery ports to prevent location leaks in browsers",
+                          style: const TextStyle(fontSize: 11, color: Colors.grey),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Switch(
+                    value: _webrtcShield,
+                    activeColor: const Color(0xFF00F2FE),
+                    onChanged: (val) {
+                      _setWebRtcShieldSetting(val);
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // کارت بررسی و نصب نسخه جدید (In-App GitHub Updater)
+          Card(
+            color: Theme.of(context).colorScheme.surface,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: const BorderSide(color: Color(0xFF00F2FE), width: 1.2),
+            ),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(16),
+              onTap: () => _checkForAppUpdate(silent: false),
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Row(
+                  children: [
+                    CircleAvatar(
+                      backgroundColor: const Color(0xFF00F2FE).withOpacity(0.15),
+                      child: const Icon(Icons.system_update_rounded, color: Color(0xFF00F2FE), size: 22),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.currentLang == "fa" ? "بررسی نسخه جدید (Check for Updates)" : "Check for Updates",
+                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            widget.currentLang == "fa" ? "نسخه فعلی: v1.2.5 (بررسی آنلاین از مخزن گیت‌هاب)" : "Current: v1.2.5 (Direct GitHub release check)",
+                            style: const TextStyle(fontSize: 11, color: Colors.grey),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(Icons.arrow_forward_ios_rounded, size: 16, color: Colors.grey),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // کارت مدیریت سرورها و سابسکریپشن‌ها (مطابق کلاینت ویندوز)
+          Card(
+            color: Theme.of(context).colorScheme.surface,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: const BorderSide(color: Color(0xFF10B981), width: 1.2),
+            ),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(16),
+              onTap: () async {
+                final selectedConfig = await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => ServersManagementScreen(
+                      currentLang: widget.currentLang,
+                      currentServers: _fetchedAccounts,
+                    ),
+                  ),
+                );
+                if (selectedConfig != null && selectedConfig is Map<String, dynamic>) {
+                  _parseAndSaveConfig(selectedConfig['rawLink'] ?? '', updateUI: true);
+                  _showSnackBar("سرور '${selectedConfig['name']}' انتخاب شد.");
+                }
+              },
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Row(
+                  children: [
+                    CircleAvatar(
+                      backgroundColor: const Color(0xFF10B981).withOpacity(0.15),
+                      child: const Icon(Icons.dns_rounded, color: Color(0xFF10B981), size: 22),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.currentLang == "fa" ? "مدیریت سرورها و سابسکریپشن (Config & Servers)" : "Servers & Subscription Management",
+                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            widget.currentLang == "fa" ? "افزودن لینک ساب، ویرایش کانفیگ‌ها و تست پینگ سریع" : "Manage subscriptions, edit configs and ultra-fast ping testing",
+                            style: const TextStyle(fontSize: 11, color: Colors.grey),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(Icons.arrow_forward_ios_rounded, size: 16, color: Colors.grey),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // کارت اختصاصی تونل انتخابی برنامه‌ها (Split Tunneling)
+          Card(
+            color: Theme.of(context).colorScheme.surface,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: BorderSide(
+                color: _splitTunnelEnabled ? const Color(0xFF00F2FE) : Colors.grey.withOpacity(0.2),
+                width: 1.2,
+              ),
+            ),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(16),
+              onTap: () async {
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => SplitTunnelScreen(currentLang: widget.currentLang),
+                  ),
+                );
+                _loadSplitTunnelSettings();
+              },
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Row(
+                  children: [
+                    CircleAvatar(
+                      backgroundColor: _splitTunnelEnabled 
+                          ? const Color(0xFF00F2FE).withOpacity(0.15) 
+                          : Colors.grey.withOpacity(0.15),
+                      child: Icon(
+                        Icons.alt_route_rounded, 
+                        color: _splitTunnelEnabled ? const Color(0xFF00F2FE) : Colors.grey, 
+                        size: 22,
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Text(
+                                widget.currentLang == "fa" ? "تونل انتخابی برنامه‌ها (Split Tunnel)" : "Split Tunneling",
+                                style: TextStyle(
+                                  fontSize: 14, 
+                                  fontWeight: FontWeight.bold,
+                                  color: _splitTunnelEnabled ? const Color(0xFF00F2FE) : null,
+                                ),
+                              ),
+                              if (_splitTunnelEnabled) ...[
+                                const SizedBox(width: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF00F2FE).withOpacity(0.15),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Text(
+                                    _splitTunnelMode == "bypass"
+                                        ? (widget.currentLang == "fa" ? "بایپس: ${_splitTunnelSelectedApps.length}" : "Bypass: ${_splitTunnelSelectedApps.length}")
+                                        : (widget.currentLang == "fa" ? "فقط پروکسی: ${_splitTunnelSelectedApps.length}" : "Proxy: ${_splitTunnelSelectedApps.length}"),
+                                    style: const TextStyle(fontSize: 9.5, fontWeight: FontWeight.bold, color: Color(0xFF00F2FE)),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _splitTunnelEnabled
+                                ? (_splitTunnelMode == "bypass"
+                                    ? (widget.currentLang == "fa" ? "برنامه‌های انتخابی بدون فیلترشکن باز می‌شوند" : "Selected apps bypass VPN directly")
+                                    : (widget.currentLang == "fa" ? "تنها برنامه‌های انتخابی از فیلترشکن عبور می‌کنند" : "Only selected apps route through VPN"))
+                                : (widget.currentLang == "fa" ? "تنظیم عبور مستقیم برنامه‌های بانکی یا پروکسی اختصاصی" : "Exclude banking apps or proxy only specific apps"),
+                            style: const TextStyle(fontSize: 11, color: Colors.grey),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(Icons.arrow_forward_ios_rounded, size: 16, color: Colors.grey),
+                  ],
+                ),
+              ),
+            ),
+          ),
           const SizedBox(height: 15),
 
           Card(
@@ -5149,6 +6033,1904 @@ class _LogsScreenState extends State<LogsScreen> {
           onPressed: _scrollToBottom,
           tooltip: isFa ? "اسکرول به انتها" : "Scroll to bottom",
           child: const Icon(Icons.arrow_downward, color: Colors.white),
+        ),
+      ),
+    );
+  }
+}
+
+// =========================================================================
+// صفحه اختصاصی اشتراک اینترنت محلی (LAN Share & Virtual Hotspot Gateway)
+// =========================================================================
+class LanShareScreen extends StatefulWidget {
+  final String currentLang;
+  const LanShareScreen({super.key, required this.currentLang});
+
+  @override
+  State<LanShareScreen> createState() => _LanShareScreenState();
+}
+
+class _LanShareScreenState extends State<LanShareScreen> {
+  static const MethodChannel _lanChannel = MethodChannel('com.redcloud.vpn/lan_channel');
+
+  final TextEditingController _ssidController = TextEditingController(text: "RedCloud");
+  final TextEditingController _passwordController = TextEditingController(text: "12345678");
+
+  bool _isSharingActive = true;
+  bool _isHotspotMode = false;
+  bool _showPassword = false;
+  bool _isRooted = false;
+  bool _transparentRouting = false;
+
+  String _localIp = "192.168.43.1";
+  final int _socksPort = 10808;
+  final int _httpPort = 10809;
+
+  List<Map<String, String>> _connectedClients = [];
+  Timer? _refreshTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _initLanData();
+  }
+
+  Future<void> _initLanData() async {
+    try {
+      final String? ip = await _lanChannel.invokeMethod('getLocalIp');
+      final bool? rooted = await _lanChannel.invokeMethod('isRooted');
+      final bool isRoot = rooted == true;
+      if (mounted) {
+        setState(() {
+          if (ip != null && ip.isNotEmpty) _localIp = ip;
+          _isRooted = isRoot;
+          if (!isRoot) _isHotspotMode = false;
+        });
+      }
+      if (isRoot) {
+        _fetchConnectedClients();
+        _refreshTimer?.cancel();
+        _refreshTimer = Timer.periodic(const Duration(seconds: 4), (timer) {
+          if (mounted && _isRooted) _fetchConnectedClients();
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _fetchConnectedClients() async {
+    try {
+      final dynamic raw = await _lanChannel.invokeMethod('getConnectedClients');
+      if (raw is List && mounted) {
+        final List<Map<String, String>> parsed = [];
+        for (var item in raw) {
+          if (item is Map) {
+            parsed.add({
+              "ip": item["ip"]?.toString() ?? "",
+              "mac": item["mac"]?.toString() ?? "",
+              "name": item["name"]?.toString() ?? "Device",
+            });
+          }
+        }
+        setState(() {
+          _connectedClients = parsed;
+        });
+      }
+    } catch (_) {}
+  }
+
+  void _copyToClipboard(String text, String successMsg) {
+    Clipboard.setData(ClipboardData(text: text));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(successMsg), duration: const Duration(seconds: 2)),
+    );
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    _ssidController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isFa = widget.currentLang == "fa";
+    final qrData = _isHotspotMode
+        ? "WIFI:S:${_ssidController.text};T:WPA;P:${_passwordController.text};;"
+        : "tg://socks?server=$_localIp&port=$_socksPort";
+
+    return Directionality(
+      textDirection: isFa ? TextDirection.rtl : TextDirection.ltr,
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(
+            isFa ? "اشتراک شبکه محلی (LAN Share)" : "LAN Share & Hotspot",
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+          ),
+          centerTitle: true,
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.refresh_rounded, color: Color(0xFF00F2FE)),
+              tooltip: "Refresh IP & Clients",
+              onPressed: _initLanData,
+            )
+          ],
+        ),
+        body: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 10.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // کارت اصلی QR Code و آدرس شبکه
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF101726),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: const Color(0xFF00F2FE).withOpacity(0.35), width: 1.3),
+                  boxShadow: [
+                    BoxShadow(color: const Color(0xFF00F2FE).withOpacity(0.1), blurRadius: 20)
+                  ],
+                ),
+                child: Column(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: QrImageView(
+                        data: qrData,
+                        version: QrVersions.auto,
+                        size: 170.0,
+                        backgroundColor: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      _isHotspotMode
+                          ? (isFa ? "هات‌اسپات فعال است! با دوربین گوشی بارکد را اسکن کنید." : "Wi-Fi Hotspot Active! Scan with camera to connect.")
+                          : (isFa ? "پروکسی فعال است! بارکد را برای اتصال تلگرام اسکن کنید." : "Proxy Active! Scan QR code to connect Telegram."),
+                      style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold, color: Color(0xFF00F2FE)),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      "Local Network Address: $_localIp:$_socksPort",
+                      style: const TextStyle(fontSize: 10.5, color: Colors.grey, fontFamily: 'monospace'),
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 16),
+
+              // کارت اول: مشخصات اتصال پروکسی محلی (Local Proxy Connection Details)
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF101726),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.router_rounded, color: Color(0xFF00F2FE), size: 18),
+                        const SizedBox(width: 8),
+                        Text(
+                          isFa ? "مشخصات پروکسی محلی (Local Proxy)" : "Local Proxy Connection Details",
+                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.white),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF090D16),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(isFa ? "آی‌پی سیستم (Proxy Host):" : "Proxy Host (Local IP):", style: const TextStyle(fontSize: 10.5, color: Colors.grey)),
+                              Text(_localIp, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.white, fontFamily: 'monospace')),
+                            ],
+                          ),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              Text(isFa ? "پورت‌ها (SOCKS / HTTP):" : "LAN Ports:", style: const TextStyle(fontSize: 10.5, color: Colors.grey)),
+                              Text("$_socksPort / $_httpPort", style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF00F2FE), fontFamily: 'monospace')),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: () => _copyToClipboard("$_localIp:$_socksPort", isFa ? "آدرس IP:Port کپی شد!" : "IP:Port Copied!"),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF1E293B),
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                            icon: const Icon(Icons.copy_rounded, size: 15),
+                            label: Text(isFa ? "کپی IP:Port" : "Copy IP:Port", style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: () => _copyToClipboard("https://t.me/socks?server=$_localIp&port=$_socksPort", isFa ? "لینک پروکسی تلگرام کپی شد!" : "Telegram Proxy Link Copied!"),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF00F2FE).withOpacity(0.2),
+                              foregroundColor: const Color(0xFF00F2FE),
+                              side: const BorderSide(color: Color(0xFF00F2FE)),
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                            icon: const Icon(Icons.send_rounded, size: 15),
+                            label: Text(isFa ? "پروکسی تلگرام" : "Telegram Proxy", style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+
+              if (_isRooted) ...[
+                const SizedBox(height: 16),
+
+                // کارت دوم: روتر مجازی و هات‌اسپات پیشرفته (فقط برای کاربران روت)
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF101726),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: _isHotspotMode ? const Color(0xFF10B981) : Colors.white12,
+                      width: _isHotspotMode ? 1.4 : 1.0,
+                    ),
+                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.wifi_tethering_rounded, color: _isHotspotMode ? const Color(0xFF10B981) : Colors.grey, size: 20),
+                            const SizedBox(width: 8),
+                            Text(
+                              isFa ? "روتر مجازی (Virtual Hotspot)" : "Virtual Wi-Fi Hotspot",
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                                color: _isHotspotMode ? Colors.white : Colors.white70,
+                              ),
+                            ),
+                          ],
+                        ),
+                        Transform.scale(
+                          scale: 0.8,
+                          child: Switch(
+                            value: _isHotspotMode,
+                            activeColor: const Color(0xFF10B981),
+                            onChanged: (val) => setState(() => _isHotspotMode = val),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      isFa ? "اشتراک بدون فیلتر اینترنت از طریق وای‌فای گوشی" : "Share uncensored internet via phone Wi-Fi",
+                      style: const TextStyle(fontSize: 10.5, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _ssidController,
+                            style: const TextStyle(fontSize: 12, color: Colors.white),
+                            decoration: InputDecoration(
+                              labelText: isFa ? "نام هات‌اسپات (SSID)" : "Hotspot Name (SSID)",
+                              labelStyle: const TextStyle(fontSize: 11, color: Colors.grey),
+                              prefixIcon: const Icon(Icons.wifi, size: 16, color: Color(0xFF10B981)),
+                              filled: true,
+                              fillColor: const Color(0xFF090D16),
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: TextField(
+                            controller: _passwordController,
+                            obscureText: !_showPassword,
+                            style: const TextStyle(fontSize: 12, color: Colors.white),
+                            decoration: InputDecoration(
+                              labelText: isFa ? "رمز عبور" : "Password",
+                              labelStyle: const TextStyle(fontSize: 11, color: Colors.grey),
+                              prefixIcon: const Icon(Icons.lock_rounded, size: 16, color: Color(0xFF10B981)),
+                              suffixIcon: IconButton(
+                                icon: Icon(_showPassword ? Icons.visibility_off : Icons.visibility, size: 16, color: Colors.grey),
+                                onPressed: () => setState(() => _showPassword = !_showPassword),
+                              ),
+                              filled: true,
+                              fillColor: const Color(0xFF090D16),
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+
+                    // نوار دکمه و مانیتور دستگاه‌های متصل
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF10B981).withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: const Color(0xFF10B981).withOpacity(0.35)),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.devices_rounded, size: 15, color: Color(0xFF10B981)),
+                              const SizedBox(width: 6),
+                              Text(
+                                "Clients (${_connectedClients.length})",
+                                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF10B981)),
+                              ),
+                            ],
+                          ),
+                        ),
+                        ElevatedButton.icon(
+                          onPressed: () => _lanChannel.invokeMethod('openHotspotSettings'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF10B981),
+                            foregroundColor: Colors.black,
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          ),
+                          icon: const Icon(Icons.settings_remote_rounded, size: 16),
+                          label: Text(isFa ? "تنظیمات هات‌اسپات" : "Hotspot Settings", style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                        ),
+                      ],
+                    ),
+
+                    // روتینگ شفاف iptables برای دستگاه‌های روت‌شده
+                    if (_isRooted) ...[
+                      const Divider(height: 20, color: Colors.white10),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.flash_on_rounded, size: 16, color: Colors.amberAccent),
+                              const SizedBox(width: 6),
+                              Text(
+                                isFa ? "هدایت خودکار ترافیک (Transparent Routing)" : "Transparent Tethering (Root)",
+                                style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold, color: Colors.white),
+                              ),
+                            ],
+                          ),
+                          Switch(
+                            value: _transparentRouting,
+                            activeColor: Colors.amberAccent,
+                            onChanged: (val) async {
+                              setState(() => _transparentRouting = val);
+                              await _lanChannel.invokeMethod('enableTransparentRouting', {'enable': val});
+                            },
+                          ),
+                        ],
+                      ),
+                      Text(
+                        isFa ? "عبور مستقیم تمام دستگاه‌های متصل بدون نیاز به تنظیم پروکسی" : "Forces all tethered traffic into VPN tunnel without client proxy configuration",
+                        style: const TextStyle(fontSize: 10, color: Colors.grey),
+                      ),
+                    ],
+
+                    // لیست زنده دستگاه‌های متصل
+                    if (_connectedClients.isNotEmpty) ...[
+                      const Divider(height: 20, color: Colors.white10),
+                      Text(isFa ? "دستگاه‌های متصل:" : "Connected Devices:", style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold, color: Colors.white70)),
+                      const SizedBox(height: 8),
+                      ..._connectedClients.map((client) {
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 6),
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF090D16),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Row(
+                                children: [
+                                  const Icon(Icons.phone_android_rounded, size: 16, color: Color(0xFF00F2FE)),
+                                  const SizedBox(width: 8),
+                                  Text(client["name"] ?? "Client", style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white)),
+                                ],
+                              ),
+                              Text(client["ip"] ?? "", style: const TextStyle(fontSize: 11, color: Color(0xFF10B981), fontFamily: 'monospace')),
+                            ],
+                          ),
+                        );
+                      }),
+                    ],
+                  ],
+                ),
+              ),
+              ],
+
+              const SizedBox(height: 16),
+
+              // راهنماهای تصویری و سریع برای کلاینت‌ها
+              ExpansionTile(
+                tilePadding: EdgeInsets.zero,
+                leading: const Icon(Icons.android_rounded, color: Color(0xFF10B981), size: 20),
+                title: Text(isFa ? "راهنمای اتصال گوشی‌های دیگر و تبلت" : "Android & Tablet Setup Guide", style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold)),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10.0),
+                    child: Text(
+                      isFa
+                          ? "۱. به هات‌اسپات گوشی یا همان وای‌فای مشترک وصل شوید.\n۲. تنظیمات وای‌فای را باز کرده و Proxy را روی Manual بگذارید.\n۳. هاست را $_localIp و پورت را $_httpPort یا $_socksPort وارد کنید."
+                          : "1. Connect to phone hotspot or same Wi-Fi.\n2. In Wi-Fi settings, set Proxy to Manual.\n3. Enter Host: $_localIp and Port: $_httpPort",
+                      style: const TextStyle(fontSize: 11, color: Colors.white60, height: 1.5),
+                    ),
+                  ),
+                ],
+              ),
+              ExpansionTile(
+                tilePadding: EdgeInsets.zero,
+                leading: const Icon(Icons.apple_rounded, color: Colors.white, size: 20),
+                title: Text(isFa ? "راهنمای اتصال آیفون و آیپد (iOS)" : "iPhone & iPad Guide (iOS)", style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold)),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10.0),
+                    child: Text(
+                      isFa
+                          ? "۱. به هات‌اسپات وصل شوید.\n۲. دکمه (i) کنار نام وای‌فای را بزنید و در پایین صفحه Configure Proxy را روی Manual قرار دهید.\n۳. Server: $_localIp و Port: $_httpPort را ذخیره کنید."
+                          : "1. Connect to Wi-Fi, tap (i) icon.\n2. Tap Configure Proxy -> Manual.\n3. Server: $_localIp, Port: $_httpPort.",
+                      style: const TextStyle(fontSize: 11, color: Colors.white60, height: 1.5),
+                    ),
+                  ),
+                ],
+              ),
+              ExpansionTile(
+                tilePadding: EdgeInsets.zero,
+                leading: const Icon(Icons.tv_rounded, color: Color(0xFF00F2FE), size: 20),
+                title: Text(isFa ? "راهنمای تلویزیون هوشمند و کنسول (PS5/Xbox/TV)" : "Smart TV & Gaming Console Guide", style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold)),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10.0),
+                    child: Text(
+                      isFa
+                          ? "در بخش Network Settings کنسول یا تلویزیون، پروکسی را روی Manual گذاشته و آدرس $_localIp:$_httpPort را وارد کنید تا یوتیوب و بازی‌ها بدون فیلتر لود شوند."
+                          : "In console/TV network settings, enable proxy with IP: $_localIp and Port: $_httpPort to enjoy free internet.",
+                      style: const TextStyle(fontSize: 11, color: Colors.white60, height: 1.5),
+                    ),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 20),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// =========================================================================
+// صفحه مدیریت هوشمند برنامه‌ها (Split Tunneling Screen)
+// =========================================================================
+class SplitTunnelScreen extends StatefulWidget {
+  final String currentLang;
+  const SplitTunnelScreen({super.key, required this.currentLang});
+
+  @override
+  State<SplitTunnelScreen> createState() => _SplitTunnelScreenState();
+}
+
+class _SplitTunnelScreenState extends State<SplitTunnelScreen> {
+  static const MethodChannel _lanChannel = MethodChannel('com.redcloud.vpn/lan_channel');
+
+  bool _isEnabled = false;
+  String _mode = "bypass"; // "bypass" یا "proxy_only"
+  bool _includeSystemApps = false;
+  String _searchQuery = "";
+
+  List<Map<String, dynamic>> _allApps = [];
+  final Set<String> _selectedPackages = {};
+  bool _isLoading = true;
+
+  final TextEditingController _searchController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSettingsAndApps();
+  }
+
+  Future<void> _loadSettingsAndApps() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    final bool savedEnabled = prefs.getBool('split_tunnel_enabled') ?? false;
+    final String savedMode = prefs.getString('split_tunnel_mode') ?? "bypass";
+    final List<String> savedSelected = prefs.getStringList('split_tunnel_selected_apps') ?? [];
+
+    setState(() {
+      _isEnabled = savedEnabled;
+      _mode = savedMode;
+      _selectedPackages.addAll(savedSelected);
+    });
+
+    try {
+      final dynamic raw = await _lanChannel.invokeMethod('getInstalledApps');
+      if (raw is List) {
+        final List<Map<String, dynamic>> parsed = [];
+        final List<String> allPkgs = [];
+        for (var item in raw) {
+          if (item is Map) {
+            final pkg = item["package"]?.toString() ?? "";
+            parsed.add({
+              "name": item["name"]?.toString() ?? "App",
+              "package": pkg,
+              "isSystem": item["isSystem"] == true,
+              "icon": item["icon"]?.toString() ?? "",
+            });
+            if (pkg.isNotEmpty) allPkgs.add(pkg);
+          }
+        }
+        await prefs.setStringList('split_tunnel_all_packages', allPkgs);
+        if (mounted) {
+          setState(() {
+            _allApps = parsed;
+            _isLoading = false;
+          });
+        }
+      }
+    } catch (_) {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _saveSettings() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('split_tunnel_enabled', _isEnabled);
+    await prefs.setString('split_tunnel_mode', _mode);
+    await prefs.setStringList('split_tunnel_selected_apps', _selectedPackages.toList());
+  }
+
+  // انتخاب هوشمند تمام برنامه‌های بانکی، پرداخت، اسنپ، دیوار و پیام‌رسان‌های ایرانی
+  void _selectRecommendedIranianApps() {
+    final domesticKeywords = [
+      "bank", "shaparak", "snapp", "tapsi", "divar", "digikala", "bale", 
+      "eitaa", "rubika", "splus", "igap", "tejarat", "mellat", "melli", 
+      "saderat", "sepah", "blubank", "saman", "parsian", "pasargad", 
+      "refah", "keshavarzi", "maskan", "aparat", "telewebion", "torob", "emalls"
+    ];
+
+    setState(() {
+      for (var app in _allApps) {
+        final pkg = (app["package"] as String).toLowerCase();
+        final name = (app["name"] as String).toLowerCase();
+        final isMatch = domesticKeywords.any((k) => pkg.contains(k) || name.contains(k));
+        if (isMatch) {
+          _selectedPackages.add(app["package"]);
+        }
+      }
+    });
+    _saveSettings();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(widget.currentLang == "fa" ? "برنامه‌های بانکی و داخلی با موفقیت انتخاب شدند." : "Banking and local apps selected."),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _saveSettings();
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isFa = widget.currentLang == "fa";
+
+    final filteredApps = _allApps.where((app) {
+      if (!_includeSystemApps && app["isSystem"] == true) return false;
+      if (_searchQuery.isNotEmpty) {
+        final name = (app["name"] as String).toLowerCase();
+        final pkg = (app["package"] as String).toLowerCase();
+        if (!name.contains(_searchQuery) && !pkg.contains(_searchQuery)) return false;
+      }
+      return true;
+    }).toList();
+
+    return WillPopScope(
+      onWillPop: () async {
+        await _saveSettings();
+        return true;
+      },
+      child: Directionality(
+        textDirection: isFa ? TextDirection.rtl : TextDirection.ltr,
+        child: Scaffold(
+          appBar: AppBar(
+            title: Text(
+              isFa ? "تونل انتخابی برنامه‌ها" : "Split Tunneling",
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+            ),
+            centerTitle: true,
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.check_rounded, color: Color(0xFF00F2FE)),
+                tooltip: "Save",
+                onPressed: () async {
+                  await _saveSettings();
+                  if (mounted) Navigator.pop(context);
+                },
+              )
+            ],
+          ),
+          body: _isLoading
+              ? const Center(child: CircularProgressIndicator(color: Color(0xFF00F2FE)))
+              : Column(
+                  children: [
+                    // نوار بالای صفحه: کلید فعال‌سازی کلی
+                    Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF101726),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: _isEnabled ? const Color(0xFF00F2FE) : Colors.white12,
+                          width: _isEnabled ? 1.4 : 1.0,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(Icons.alt_route_rounded, color: _isEnabled ? const Color(0xFF00F2FE) : Colors.grey, size: 22),
+                              const SizedBox(width: 10),
+                              Text(
+                                isFa ? "فعال‌سازی تونل انتخابی" : "Enable Split Tunneling",
+                                style: TextStyle(
+                                  fontSize: 13.5,
+                                  fontWeight: FontWeight.bold,
+                                  color: _isEnabled ? Colors.white : Colors.white70,
+                                ),
+                              ),
+                            ],
+                          ),
+                          Switch(
+                            value: _isEnabled,
+                            activeColor: const Color(0xFF00F2FE),
+                            onChanged: (val) {
+                              setState(() => _isEnabled = val);
+                              _saveSettings();
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    // دو حالت انتخابی (بایپس یا پروکسی اختصاصی)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
+                      child: Row(
+                        children: [
+                          // حالت اول: بایپس (Exclude)
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: () {
+                                setState(() => _mode = "bypass");
+                                _saveSettings();
+                              },
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                                decoration: BoxDecoration(
+                                  color: _mode == "bypass" ? const Color(0xFF10B981).withOpacity(0.15) : const Color(0xFF101726),
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(
+                                    color: _mode == "bypass" ? const Color(0xFF10B981) : Colors.white10,
+                                    width: _mode == "bypass" ? 1.5 : 1.0,
+                                  ),
+                                ),
+                                child: Column(
+                                  children: [
+                                    Icon(Icons.do_not_disturb_on_rounded, color: _mode == "bypass" ? const Color(0xFF10B981) : Colors.grey, size: 20),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      isFa ? "بایپس برنامه‌ها" : "Bypass Apps",
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.bold,
+                                        color: _mode == "bypass" ? const Color(0xFF10B981) : Colors.white70,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      isFa ? "مستقیم (بانک‌ها و اسنپ)" : "Direct (Bypass VPN)",
+                                      style: const TextStyle(fontSize: 9.5, color: Colors.grey),
+                                      textAlign: TextAlign.center,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          // حالت دوم: فقط پروکسی (Include)
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: () {
+                                setState(() => _mode = "proxy_only");
+                                _saveSettings();
+                              },
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                                decoration: BoxDecoration(
+                                  color: _mode == "proxy_only" ? const Color(0xFF00F2FE).withOpacity(0.15) : const Color(0xFF101726),
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(
+                                    color: _mode == "proxy_only" ? const Color(0xFF00F2FE) : Colors.white10,
+                                    width: _mode == "proxy_only" ? 1.5 : 1.0,
+                                  ),
+                                ),
+                                child: Column(
+                                  children: [
+                                    Icon(Icons.vpn_lock_rounded, color: _mode == "proxy_only" ? const Color(0xFF00F2FE) : Colors.grey, size: 20),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      isFa ? "فقط پروکسی" : "Proxy Only",
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.bold,
+                                        color: _mode == "proxy_only" ? const Color(0xFF00F2FE) : Colors.white70,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      isFa ? "فقط برنامه‌های تیک‌خورده" : "Only selected apps",
+                                      style: const TextStyle(fontSize: 9.5, color: Colors.grey),
+                                      textAlign: TextAlign.center,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    // نوار ابزار: جستجو و دکمه‌های سریع
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _searchController,
+                              onChanged: (val) => setState(() => _searchQuery = val.toLowerCase().trim()),
+                              style: const TextStyle(fontSize: 12, color: Colors.white),
+                              decoration: InputDecoration(
+                                hintText: isFa ? "جستجوی نام برنامه..." : "Search apps...",
+                                hintStyle: const TextStyle(fontSize: 11.5, color: Colors.grey),
+                                prefixIcon: const Icon(Icons.search, size: 18, color: Colors.grey),
+                                filled: true,
+                                fillColor: const Color(0xFF101726),
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          IconButton(
+                            icon: Icon(
+                              _includeSystemApps ? Icons.android_rounded : Icons.android_outlined,
+                              color: _includeSystemApps ? const Color(0xFF00F2FE) : Colors.grey,
+                              size: 22,
+                            ),
+                            tooltip: isFa ? "نمایش برنامه‌های سیستمی" : "Toggle System Apps",
+                            onPressed: () => setState(() => _includeSystemApps = !_includeSystemApps),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.auto_awesome_rounded, color: Colors.amberAccent, size: 22),
+                            tooltip: isFa ? "انتخاب خودکار بانک‌ها و برنامه‌های ایرانی" : "Auto select banking apps",
+                            onPressed: _selectRecommendedIranianApps,
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    // شمارنده برنامه‌ها
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 2.0),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            isFa 
+                                ? "انتخاب شده: ${_selectedPackages.length} برنامه" 
+                                : "Selected: ${_selectedPackages.length} apps",
+                            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF00F2FE)),
+                          ),
+                          if (_selectedPackages.isNotEmpty)
+                            GestureDetector(
+                              onTap: () {
+                                setState(() => _selectedPackages.clear());
+                                _saveSettings();
+                              },
+                              child: Text(
+                                isFa ? "پاک کردن انتخاب‌ها" : "Clear all",
+                                style: const TextStyle(fontSize: 11, color: Colors.redAccent),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+
+                    const Divider(height: 12, color: Colors.white10),
+
+                    // لیست اپلیکیشن‌ها
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: filteredApps.length,
+                        itemBuilder: (context, index) {
+                          final app = filteredApps[index];
+                          final pkg = app["package"] as String;
+                          final name = app["name"] as String;
+                          final isSelected = _selectedPackages.contains(pkg);
+                          final iconBase64 = app["icon"] as String;
+
+                          return Container(
+                            margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: isSelected ? const Color(0xFF101726) : Colors.transparent,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: isSelected ? const Color(0xFF00F2FE).withOpacity(0.35) : Colors.transparent,
+                              ),
+                            ),
+                            child: ListTile(
+                              dense: true,
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
+                              leading: iconBase64.isNotEmpty
+                                  ? ClipRRect(
+                                      borderRadius: BorderRadius.circular(8),
+                                      child: Image.memory(
+                                        base64Decode(iconBase64),
+                                        width: 36,
+                                        height: 36,
+                                        errorBuilder: (_, __, ___) => const Icon(Icons.android, size: 32, color: Colors.grey),
+                                      ),
+                                    )
+                                  : const Icon(Icons.android, size: 32, color: Colors.grey),
+                              title: Text(
+                                name,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                  color: isSelected ? Colors.white : Colors.white70,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              subtitle: Text(
+                                pkg,
+                                style: const TextStyle(fontSize: 10, color: Colors.grey, fontFamily: 'monospace'),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              trailing: Checkbox(
+                                value: isSelected,
+                                activeColor: _mode == "bypass" ? const Color(0xFF10B981) : const Color(0xFF00F2FE),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                                onChanged: (val) {
+                                  setState(() {
+                                    if (val == true) {
+                                      _selectedPackages.add(pkg);
+                                    } else {
+                                      _selectedPackages.remove(pkg);
+                                    }
+                                  });
+                                  _saveSettings();
+                                },
+                              ),
+                              onTap: () {
+                                setState(() {
+                                  if (isSelected) {
+                                    _selectedPackages.remove(pkg);
+                                  } else {
+                                    _selectedPackages.add(pkg);
+                                  }
+                                });
+                                _saveSettings();
+                              },
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+        ),
+      ),
+    );
+  }
+}
+
+// =========================================================================
+// صفحه مدیریت سرورها و سابسکریپشن (Servers & Subscription Management)
+// =========================================================================
+class ServersManagementScreen extends StatefulWidget {
+  final String currentLang;
+  final List<Map<String, String>> currentServers;
+
+  const ServersManagementScreen({
+    super.key,
+    required this.currentLang,
+    required this.currentServers,
+  });
+
+  @override
+  State<ServersManagementScreen> createState() => _ServersManagementScreenState();
+}
+
+class _ServersManagementScreenState extends State<ServersManagementScreen> {
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = "";
+  int _selectedFilterTab = 0; // 0: All, 1: Subscriptions, 2: Manual & Custom
+
+  List<Map<String, dynamic>> _servers = [];
+  List<String> _subscriptionUrls = [];
+  int _activeServerIndex = 0;
+  bool _isTestingPing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadServersData();
+  }
+
+  Future<void> _loadServersData() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    final String? savedJson = prefs.getString('saved_custom_servers_list_v2');
+    final List<String>? savedSubs = prefs.getStringList('saved_subscription_urls_v2');
+
+    List<Map<String, dynamic>> list = [];
+
+    if (savedJson != null) {
+      try {
+        final List<dynamic> decoded = jsonDecode(savedJson);
+        list = decoded.cast<Map<String, dynamic>>().toList();
+      } catch (_) {}
+    }
+
+    // اگر لیست خالی بود، از سرورهای اولیه برنامه پر شود
+    if (list.isEmpty) {
+      for (int i = 0; i < widget.currentServers.length; i++) {
+        final acc = widget.currentServers[i];
+        final worker = acc['worker'] ?? 'round-sea-8418.redcloudir.workers.dev';
+        final uuid = acc['uuid'] ?? '';
+        final path = acc['path'] ?? '/';
+        list.add({
+          "id": "builtin_$i",
+          "name": "Server ${i + 1}",
+          "protocol": "VLESS",
+          "address": worker,
+          "port": 443,
+          "uuid": uuid,
+          "transport": "ws",
+          "wsHost": worker,
+          "wsPath": path,
+          "security": "tls",
+          "sni": worker,
+          "fingerprint": "chrome",
+          "alpn": "http/1.1",
+          "allowInsecure": false,
+          "ech": "",
+          "ping": 0,
+          "isSubscription": false,
+          "subUrl": "",
+          "rawLink": "vless://$uuid@$worker:443?encryption=none&security=tls&sni=$worker&fp=chrome&alpn=http%2F1.1&type=ws&host=$worker&path=${Uri.encodeComponent(path)}#Server_${i + 1}",
+        });
+      }
+    }
+
+    setState(() {
+      _servers = list;
+      _subscriptionUrls = savedSubs ?? [];
+    });
+  }
+
+  Future<void> _saveServersData() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.setString('saved_custom_servers_list_v2', jsonEncode(_servers));
+    await prefs.setStringList('saved_subscription_urls_v2', _subscriptionUrls);
+  }
+
+  String _buildVlessLink(Map<String, dynamic> s) {
+    final uuid = s['uuid'] ?? '';
+    final address = s['address'] ?? '';
+    final port = s['port'] ?? 443;
+    final security = s['security'] ?? 'tls';
+    final sni = s['sni'] ?? address;
+    final fp = s['fingerprint'] ?? 'chrome';
+    final alpn = Uri.encodeComponent(s['alpn'] ?? 'http/1.1');
+    final transport = s['transport'] ?? 'ws';
+    final wsHost = s['wsHost'] ?? address;
+    final wsPath = Uri.encodeComponent(s['wsPath'] ?? '/');
+    final name = Uri.encodeComponent(s['name'] ?? 'RedCloud_Server');
+    return "vless://$uuid@$address:$port?encryption=none&security=$security&sni=$sni&fp=$fp&alpn=$alpn&type=$transport&host=$wsHost&path=$wsPath#$name";
+  }
+
+  Future<int> _pingAddress(String address, int port) async {
+    final stopwatch = Stopwatch()..start();
+    try {
+      final socket = await Socket.connect(address, port, timeout: const Duration(milliseconds: 1800));
+      stopwatch.stop();
+      socket.destroy();
+      return stopwatch.elapsedMilliseconds;
+    } catch (_) {
+      return -1; // تایم اوت یا فیلتر
+    }
+  }
+
+  Future<void> _testSinglePing(int index) async {
+    final s = _servers[index];
+    setState(() => s['ping'] = -2); // در حال تست
+    final ms = await _pingAddress(s['address'] ?? '1.1.1.1', s['port'] ?? 443);
+    setState(() => s['ping'] = ms);
+    _saveServersData();
+  }
+
+  Future<void> _testAllPingsAndSort() async {
+    setState(() => _isTestingPing = true);
+    for (int i = 0; i < _servers.length; i++) {
+      _servers[i]['ping'] = -2;
+    }
+    setState(() {});
+
+    final tasks = _servers.map((s) async {
+      final ms = await _pingAddress(s['address'] ?? '1.1.1.1', s['port'] ?? 443);
+      s['ping'] = ms;
+    }).toList();
+
+    await Future.wait(tasks);
+
+    // مرتب‌سازی: کمترین پینگ در بالا، پینگ‌های منفی در انتها
+    _servers.sort((a, b) {
+      final pA = a['ping'] as int;
+      final pB = b['ping'] as int;
+      if (pA <= 0 && pB <= 0) return 0;
+      if (pA <= 0) return 1;
+      if (pB <= 0) return -1;
+      return pA.compareTo(pB);
+    });
+
+    setState(() => _isTestingPing = false);
+    _saveServersData();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("تست پینگ به پایان رسید و سرورها مرتب شدند."), duration: Duration(seconds: 2)),
+    );
+  }
+
+  void _openEditModal({Map<String, dynamic>? server, int? index}) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0E1424),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (ctx) => EditServerModal(
+        server: server,
+        onSave: (updated) {
+          setState(() {
+            updated['rawLink'] = _buildVlessLink(updated);
+            if (index != null && index >= 0) {
+              _servers[index] = updated;
+            } else {
+              _servers.add(updated);
+            }
+          });
+          _saveServersData();
+        },
+      ),
+    );
+  }
+
+  void _addNewSubscriptionDialog() {
+    final subController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF101726),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: Color(0xFF00F2FE))),
+        title: const Row(
+          children: [
+            Icon(Icons.add_link_rounded, color: Color(0xFF00F2FE)),
+            SizedBox(width: 8),
+            Text("Add New Subscription", style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: TextField(
+          controller: subController,
+          style: const TextStyle(fontSize: 12),
+          decoration: const InputDecoration(
+            hintText: "https://.../sub (مرزبان، ثنایی، ...)",
+            hintStyle: TextStyle(color: Colors.grey, fontSize: 11),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("انصراف", style: TextStyle(color: Colors.grey))),
+          ElevatedButton(
+            onPressed: () async {
+              final url = subController.text.trim();
+              if (url.isNotEmpty) {
+                Navigator.pop(ctx);
+                _fetchSubscription(url);
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00F2FE), foregroundColor: Colors.black),
+            child: const Text("افزودن و بروزرسانی"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Map<String, dynamic> _parseV2RayShareLink(String rawLink, {String defaultName = "Server"}) {
+    final link = rawLink.trim();
+    String name = defaultName;
+    String protocol = "VLESS";
+    String address = "";
+    int port = 443;
+    String uuid = "";
+    String transport = "ws";
+    String wsHost = "";
+    String wsPath = "/";
+    String security = "tls";
+    String sni = "";
+    String fingerprint = "chrome";
+    String alpn = "http/1.1";
+
+    try {
+      if (link.startsWith("vmess://")) {
+        protocol = "VMESS";
+        final b64 = link.substring(8).trim();
+        final jsonStr = utf8.decode(base64Decode(base64.normalize(b64)));
+        final Map<String, dynamic> vmessMap = jsonDecode(jsonStr);
+        name = vmessMap['ps']?.toString() ?? defaultName;
+        address = vmessMap['add']?.toString() ?? "";
+        port = int.tryParse(vmessMap['port']?.toString() ?? '443') ?? 443;
+        uuid = vmessMap['id']?.toString() ?? "";
+        transport = vmessMap['net']?.toString() ?? "ws";
+        wsHost = vmessMap['host']?.toString() ?? address;
+        wsPath = vmessMap['path']?.toString() ?? "/";
+        security = (vmessMap['tls']?.toString() == "tls") ? "tls" : "none";
+        sni = vmessMap['sni']?.toString() ?? wsHost;
+      } else if (link.startsWith("vless://") || link.startsWith("trojan://")) {
+        protocol = link.startsWith("trojan://") ? "TROJAN" : "VLESS";
+        final uri = Uri.parse(link);
+        uuid = uri.userInfo;
+        address = uri.host;
+        port = uri.port > 0 ? uri.port : 443;
+        if (uri.fragment.isNotEmpty) {
+          name = Uri.decodeComponent(uri.fragment);
+        }
+        final q = uri.queryParameters;
+        transport = q['type'] ?? q['net'] ?? "ws";
+        security = q['security'] ?? "tls";
+        sni = q['sni'] ?? q['peer'] ?? address;
+        wsHost = q['host'] ?? sni;
+        wsPath = q['path'] ?? "/";
+        fingerprint = q['fp'] ?? "chrome";
+        alpn = q['alpn'] ?? "http/1.1";
+      }
+    } catch (_) {}
+
+    return {
+      "name": name.isNotEmpty ? name : defaultName,
+      "protocol": protocol,
+      "address": address,
+      "port": port,
+      "uuid": uuid,
+      "transport": transport,
+      "wsHost": wsHost.isNotEmpty ? wsHost : address,
+      "wsPath": wsPath.isNotEmpty ? wsPath : "/",
+      "security": security,
+      "sni": sni.isNotEmpty ? sni : address,
+      "fingerprint": fingerprint,
+      "alpn": alpn,
+      "allowInsecure": false,
+      "ech": "",
+      "ping": 0,
+      "isSubscription": false,
+      "subUrl": "",
+      "rawLink": link,
+    };
+  }
+
+  Future<void> _fetchSubscription(String url) async {
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("در حال دریافت کانفیگ‌های سابسکریپشن...")));
+    try {
+      final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
+      final req = await client.getUrl(Uri.parse(url));
+      final resp = await req.close();
+      if (resp.statusCode == 200) {
+        String body = await resp.transform(utf8.decoder).join();
+        body = body.trim();
+        // دیکود Base64 در صورت انکود بودن
+        String decoded = body;
+        try {
+          decoded = utf8.decode(base64Decode(base64.normalize(body)));
+        } catch (_) {}
+
+        final lines = decoded.split('\n');
+        int added = 0;
+        for (var line in lines) {
+          final l = line.trim();
+          if (l.startsWith("vless://") || l.startsWith("vmess://") || l.startsWith("trojan://")) {
+            try {
+              final serverMap = _parseV2RayShareLink(l, defaultName: "Sub Server ${added + 1}");
+              serverMap["id"] = "sub_${DateTime.now().millisecondsSinceEpoch}_$added";
+              serverMap["isSubscription"] = true;
+              serverMap["subUrl"] = url;
+              _servers.add(serverMap);
+              added++;
+            } catch (_) {}
+          }
+        }
+        if (!_subscriptionUrls.contains(url)) _subscriptionUrls.add(url);
+        setState(() {});
+        _saveServersData();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("تعداد $added سرور با موفقیت اضافه شد.")));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("خطا در دریافت سابسکریپشن: $e")));
+    }
+  }
+
+  void _addSingleConfigDialog() {
+    final linkController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF101726),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: Color(0xFF10B981))),
+        title: const Row(
+          children: [
+            Icon(Icons.add_box_rounded, color: Color(0xFF10B981)),
+            SizedBox(width: 8),
+            Text("Add Single Config", style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: TextField(
+          controller: linkController,
+          maxLines: 4,
+          style: const TextStyle(fontSize: 11),
+          decoration: const InputDecoration(
+            hintText: "Paste vless://, vmess:// or trojan:// here...",
+            hintStyle: TextStyle(color: Colors.grey, fontSize: 10.5),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              final data = await Clipboard.getData('text/plain');
+              if (data?.text != null) linkController.text = data!.text!.trim();
+            },
+            child: const Text("Paste Clipboard", style: TextStyle(color: Color(0xFF00F2FE))),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final link = linkController.text.trim();
+              if (link.isNotEmpty) {
+                Navigator.pop(ctx);
+                try {
+                  final newServer = _parseV2RayShareLink(link, defaultName: "Manual Config");
+                  newServer["id"] = "manual_${DateTime.now().millisecondsSinceEpoch}";
+                  setState(() => _servers.add(newServer));
+                  _saveServersData();
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("کانفیگ با موفقیت اضافه شد.")));
+                } catch (e) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("فرمت لینک کانفیگ نامعتبر است.")));
+                }
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF10B981), foregroundColor: Colors.black),
+            child: const Text("افزودن"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final filtered = _servers.where((s) {
+      if (_selectedFilterTab == 1 && s['isSubscription'] != true) return false;
+      if (_selectedFilterTab == 2 && s['isSubscription'] == true) return false;
+      if (_searchQuery.isNotEmpty) {
+        final q = _searchQuery.toLowerCase();
+        final name = (s['name'] ?? '').toString().toLowerCase();
+        final addr = (s['address'] ?? '').toString().toLowerCase();
+        final port = (s['port'] ?? '').toString();
+        final proto = (s['protocol'] ?? '').toString().toLowerCase();
+        if (!name.contains(q) && !addr.contains(q) && !port.contains(q) && !proto.contains(q)) return false;
+      }
+      return true;
+    }).toList();
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF090D16),
+      appBar: AppBar(
+        title: const Text("Servers & Subscription Management", style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.delete_sweep_rounded, color: Colors.redAccent),
+            tooltip: "Clear All Servers",
+            onPressed: () {
+              setState(() => _servers.clear());
+              _saveServersData();
+            },
+          )
+        ],
+      ),
+      body: Column(
+        children: [
+          // دو دکمه اصلی در بالای صفحه: افزودن کانفیگ و سابسکریپشن (مطابق ویندوز)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 6.0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _addSingleConfigDialog,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF10B981),
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                    icon: const Icon(Icons.add, size: 16),
+                    label: const Text("+ Add Single Config", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _addNewSubscriptionDialog,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF00F2FE),
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                    icon: const Icon(Icons.add_link, size: 16),
+                    label: const Text("+ Add New Subscription", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // فیلتر تب‌ها (All Servers, Subscriptions, Manual) - با اسکرول افقی واکنش‌گرا
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 4.0),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
+              child: Row(
+                children: [
+                  ChoiceChip(
+                    label: Text("All Servers (${_servers.length})", style: const TextStyle(fontSize: 11)),
+                    selected: _selectedFilterTab == 0,
+                    selectedColor: const Color(0xFF3B82F6),
+                    backgroundColor: const Color(0xFF101726),
+                    onSelected: (val) => setState(() => _selectedFilterTab = 0),
+                  ),
+                  const SizedBox(width: 6),
+                  ChoiceChip(
+                    label: Text("Subscriptions (${_servers.where((s) => s['isSubscription'] == true).length})", style: const TextStyle(fontSize: 11)),
+                    selected: _selectedFilterTab == 1,
+                    selectedColor: const Color(0xFF00F2FE),
+                    backgroundColor: const Color(0xFF101726),
+                    onSelected: (val) => setState(() => _selectedFilterTab = 1),
+                  ),
+                  const SizedBox(width: 6),
+                  ChoiceChip(
+                    label: Text("Manual (${_servers.where((s) => s['isSubscription'] != true).length})", style: const TextStyle(fontSize: 11)),
+                    selected: _selectedFilterTab == 2,
+                    selectedColor: const Color(0xFF10B981),
+                    backgroundColor: const Color(0xFF101726),
+                    onSelected: (val) => setState(() => _selectedFilterTab = 2),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // نوار جستجو و دکمه‌های تست پینگ و آپدیت
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 6.0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    onChanged: (val) => setState(() => _searchQuery = val.trim()),
+                    style: const TextStyle(fontSize: 11.5),
+                    decoration: InputDecoration(
+                      hintText: "Search servers by name, port, IP, protocol...",
+                      hintStyle: const TextStyle(fontSize: 10.5, color: Colors.grey),
+                      prefixIcon: const Icon(Icons.search, size: 16, color: Colors.grey),
+                      filled: true,
+                      fillColor: const Color(0xFF101726),
+                      contentPadding: const EdgeInsets.symmetric(vertical: 6, horizontal: 10),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                OutlinedButton.icon(
+                  onPressed: _isTestingPing ? null : _testAllPingsAndSort,
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Color(0xFF10B981)),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  icon: _isTestingPing
+                      ? const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF10B981)))
+                      : const Icon(Icons.bolt, size: 15, color: Color(0xFF10B981)),
+                  label: const Text("Ping Test & Sort", style: TextStyle(fontSize: 10.5, color: Color(0xFF10B981), fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ),
+          ),
+
+          const Divider(height: 10, color: Colors.white10),
+
+          // لیست کارت‌های سرور دقیقاً مشابه ویندوز
+          Expanded(
+            child: filtered.isEmpty
+                ? const Center(child: Text("هیچ سروری یافت نشد.", style: TextStyle(color: Colors.grey, fontSize: 12)))
+                : ListView.builder(
+                    itemCount: filtered.length,
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                    itemBuilder: (ctx, idx) {
+                      final s = filtered[idx];
+                      final isSelected = _activeServerIndex == idx;
+                      final pingVal = s['ping'] as int? ?? 0;
+
+                      Color pingColor = Colors.grey;
+                      String pingText = "--";
+                      if (pingVal == -2) {
+                        pingText = "...";
+                        pingColor = Colors.amberAccent;
+                      } else if (pingVal == -1) {
+                        pingText = "Timeout";
+                        pingColor = Colors.redAccent;
+                      } else if (pingVal > 0) {
+                        pingText = "$pingVal ms";
+                        pingColor = pingVal < 250 ? const Color(0xFF10B981) : (pingVal < 600 ? Colors.amberAccent : Colors.redAccent);
+                      }
+
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF101726),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: isSelected ? const Color(0xFF10B981) : Colors.white10,
+                            width: isSelected ? 1.4 : 1.0,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            // شماره سرور
+                            Text("${idx + 1}", style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey)),
+                            const SizedBox(width: 8),
+
+                            // بج پروتکل (VLESS / VMESS / TROJAN)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF00F2FE).withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: const Color(0xFF00F2FE).withOpacity(0.4)),
+                              ),
+                              child: Text(
+                                s['protocol'] ?? 'VLESS',
+                                style: const TextStyle(fontSize: 9.5, fontWeight: FontWeight.bold, color: Color(0xFF00F2FE)),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+
+                            // عنوان و آدرس سرور
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    s['name'] ?? 'Server',
+                                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: isSelected ? Colors.white : Colors.white70),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    "${s['address']}:${s['port']}  ${(s['transport'] ?? 'ws').toString().toUpperCase()} | ${(s['security'] ?? 'tls').toString().toUpperCase()}",
+                                    style: const TextStyle(fontSize: 10, color: Colors.grey, fontFamily: 'monospace'),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
+                              ),
+                            ),
+
+                            // مقدار پینگ زنده
+                            GestureDetector(
+                              onTap: () => _testSinglePing(idx),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: pingColor.withOpacity(0.12),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.bolt, size: 12, color: pingColor),
+                                    Text(pingText, style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: pingColor)),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+
+                            // دکمه کپی لینک
+                            IconButton(
+                              icon: const Icon(Icons.copy_rounded, size: 15, color: Colors.grey),
+                              tooltip: "Copy Link",
+                              onPressed: () {
+                                final link = s['rawLink'] ?? _buildVlessLink(s);
+                                Clipboard.setData(ClipboardData(text: link));
+                                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("لینک کانفیگ کپی شد!")));
+                              },
+                            ),
+
+                            // دکمه ویرایش (Pencil)
+                            IconButton(
+                              icon: const Icon(Icons.edit_rounded, size: 15, color: Colors.grey),
+                              tooltip: "Edit Config",
+                              onPressed: () => _openEditModal(server: s, index: idx),
+                            ),
+
+                            // دکمه حذف
+                            IconButton(
+                              icon: const Icon(Icons.delete_outline_rounded, size: 15, color: Colors.redAccent),
+                              tooltip: "Delete",
+                              onPressed: () {
+                                setState(() => _servers.removeAt(idx));
+                                _saveServersData();
+                              },
+                            ),
+
+                            // دکمه انتخاب سرور فعال (تیک سبز)
+                            IconButton(
+                              icon: Icon(
+                                isSelected ? Icons.check_circle_rounded : Icons.radio_button_unchecked,
+                                size: 18,
+                                color: isSelected ? const Color(0xFF10B981) : Colors.grey,
+                              ),
+                              tooltip: "Select Active",
+                              onPressed: () {
+                                setState(() => _activeServerIndex = idx);
+                                Navigator.pop(context, s);
+                              },
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// =========================================================================
+// مودال ویرایش کانفیگ (Edit Server Configuration) کاملاً منطبق بر نسخه ویندوز
+// =========================================================================
+class EditServerModal extends StatefulWidget {
+  final Map<String, dynamic>? server;
+  final Function(Map<String, dynamic>) onSave;
+
+  const EditServerModal({super.key, this.server, required this.onSave});
+
+  @override
+  State<EditServerModal> createState() => _EditServerModalState();
+}
+
+class _EditServerModalState extends State<EditServerModal> {
+  late TextEditingController _nameController;
+  late TextEditingController _addressController;
+  late TextEditingController _portController;
+  late TextEditingController _uuidController;
+  late TextEditingController _wsHostController;
+  late TextEditingController _wsPathController;
+  late TextEditingController _sniController;
+  late TextEditingController _echController;
+
+  String _protocol = "VLESS";
+  String _transport = "WS";
+  String _security = "TLS";
+  String _fingerprint = "chrome";
+  String _alpn = "http/1.1";
+  bool _allowInsecure = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final s = widget.server ?? {};
+    _protocol = s['protocol'] ?? "VLESS";
+    _transport = (s['transport'] ?? "WS").toString().toUpperCase();
+    _security = (s['security'] ?? "TLS").toString().toUpperCase();
+    _fingerprint = s['fingerprint'] ?? "chrome";
+    _alpn = s['alpn'] ?? "http/1.1";
+    _allowInsecure = s['allowInsecure'] == true;
+
+    _nameController = TextEditingController(text: s['name'] ?? "RedCloud Server");
+    _addressController = TextEditingController(text: s['address'] ?? "");
+    _portController = TextEditingController(text: (s['port'] ?? 443).toString());
+    _uuidController = TextEditingController(text: s['uuid'] ?? "");
+    _wsHostController = TextEditingController(text: s['wsHost'] ?? s['address'] ?? "");
+    _wsPathController = TextEditingController(text: s['wsPath'] ?? "/");
+    _sniController = TextEditingController(text: s['sni'] ?? s['address'] ?? "");
+    _echController = TextEditingController(text: s['ech'] ?? "");
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _addressController.dispose();
+    _portController.dispose();
+    _uuidController.dispose();
+    _wsHostController.dispose();
+    _wsPathController.dispose();
+    _sniController.dispose();
+    _echController.dispose();
+    super.dispose();
+  }
+
+  Widget _buildField({required String label, required TextEditingController controller, bool isNumber = false}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+          const SizedBox(height: 4),
+          TextField(
+            controller: controller,
+            keyboardType: isNumber ? TextInputType.number : TextInputType.text,
+            style: const TextStyle(fontSize: 12, color: Colors.white, fontFamily: 'monospace'),
+            decoration: InputDecoration(
+              filled: true,
+              fillColor: const Color(0xFF101726),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+        top: 16,
+        left: 16,
+        right: 16,
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.edit_note_rounded, color: Color(0xFFC084FC), size: 22),
+                const SizedBox(width: 8),
+                const Text(
+                  "Edit Server Configuration (VLESS / Trojan / VMESS)",
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+                ),
+              ],
+            ),
+            const Divider(height: 20, color: Colors.white10),
+
+            // پروتکل اتصال
+            Row(
+              children: [
+                const Text("Connection Protocol:", style: TextStyle(fontSize: 11.5, color: Colors.grey)),
+                const SizedBox(width: 12),
+                DropdownButton<String>(
+                  value: _protocol,
+                  dropdownColor: const Color(0xFF101726),
+                  underline: const SizedBox.shrink(),
+                  style: const TextStyle(color: Color(0xFF00F2FE), fontWeight: FontWeight.bold, fontSize: 12),
+                  onChanged: (val) => setState(() => _protocol = val ?? "VLESS"),
+                  items: ["VLESS", "VMESS", "TROJAN"].map((p) => DropdownMenuItem(value: p, child: Text(p))).toList(),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+
+            _buildField(label: "Alias / Remarks", controller: _nameController),
+
+            Row(
+              children: [
+                Expanded(flex: 3, child: _buildField(label: "Server Address", controller: _addressController)),
+                const SizedBox(width: 8),
+                Expanded(flex: 1, child: _buildField(label: "Port", controller: _portController, isNumber: true)),
+              ],
+            ),
+
+            _buildField(label: "UUID / Password", controller: _uuidController),
+
+            // پروتکل انتقال
+            Row(
+              children: [
+                const Text("Transport Protocol:", style: TextStyle(fontSize: 11.5, color: Colors.grey)),
+                const SizedBox(width: 12),
+                DropdownButton<String>(
+                  value: _transport,
+                  dropdownColor: const Color(0xFF101726),
+                  underline: const SizedBox.shrink(),
+                  style: const TextStyle(color: Color(0xFF10B981), fontWeight: FontWeight.bold, fontSize: 12),
+                  onChanged: (val) => setState(() => _transport = val ?? "WS"),
+                  items: ["WS", "TCP", "GRPC"].map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+
+            _buildField(label: "WebSocket Host", controller: _wsHostController),
+            _buildField(label: "WebSocket Path", controller: _wsPathController),
+
+            const Text("TLS & Reality Security Settings", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFFC084FC))),
+            const SizedBox(height: 8),
+
+            Row(
+              children: [
+                const Text("Security Type:", style: TextStyle(fontSize: 11, color: Colors.grey)),
+                const SizedBox(width: 8),
+                DropdownButton<String>(
+                  value: _security,
+                  dropdownColor: const Color(0xFF101726),
+                  underline: const SizedBox.shrink(),
+                  style: const TextStyle(color: Colors.white, fontSize: 11),
+                  onChanged: (val) => setState(() => _security = val ?? "TLS"),
+                  items: ["TLS", "NONE", "REALITY"].map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
+                ),
+                const SizedBox(width: 12),
+                const Text("Fingerprint:", style: TextStyle(fontSize: 11, color: Colors.grey)),
+                const SizedBox(width: 6),
+                DropdownButton<String>(
+                  value: _fingerprint,
+                  dropdownColor: const Color(0xFF101726),
+                  underline: const SizedBox.shrink(),
+                  style: const TextStyle(color: Colors.white, fontSize: 11),
+                  onChanged: (val) => setState(() => _fingerprint = val ?? "chrome"),
+                  items: ["chrome", "firefox", "safari", "randomized"].map((f) => DropdownMenuItem(value: f, child: Text(f))).toList(),
+                ),
+              ],
+            ),
+
+            _buildField(label: "Server Name (SNI / Peer)", controller: _sniController),
+
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text("Allow Insecure Certificates", style: TextStyle(fontSize: 11.5, color: Colors.white70)),
+                Switch(
+                  value: _allowInsecure,
+                  activeColor: const Color(0xFFC084FC),
+                  onChanged: (val) => setState(() => _allowInsecure = val),
+                ),
+              ],
+            ),
+
+            _buildField(label: "ECH Config List (EchConfigList)", controller: _echController),
+
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: () {
+                    final data = {
+                      "id": widget.server?['id'] ?? "custom_${DateTime.now().millisecondsSinceEpoch}",
+                      "name": _nameController.text.trim(),
+                      "protocol": _protocol,
+                      "address": _addressController.text.trim(),
+                      "port": int.tryParse(_portController.text.trim()) ?? 443,
+                      "uuid": _uuidController.text.trim(),
+                      "transport": _transport.toLowerCase(),
+                      "wsHost": _wsHostController.text.trim(),
+                      "wsPath": _wsPathController.text.trim(),
+                      "security": _security.toLowerCase(),
+                      "sni": _sniController.text.trim(),
+                      "fingerprint": _fingerprint,
+                      "alpn": _alpn,
+                      "allowInsecure": _allowInsecure,
+                      "ech": _echController.text.trim(),
+                      "ping": widget.server?['ping'] ?? 0,
+                      "isSubscription": widget.server?['isSubscription'] ?? false,
+                      "subUrl": widget.server?['subUrl'] ?? "",
+                    };
+                    widget.onSave(data);
+                    Navigator.pop(context);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFC084FC),
+                    foregroundColor: Colors.black,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  child: const Text("Save Changes", style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );

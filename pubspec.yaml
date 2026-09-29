@@ -3,7 +3,7 @@ description: "RedCloud VPN - Multi-Core Android Client (V2Ray, Aether & Tor Engi
 publish_to: 'none'
 
 # نسخه جدید برنامه همراه با پایداری پس‌زمینه و رفع باگ‌های شبکه
-version: 1.2.4+7
+version: 1.2.5+8
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -16,6 +16,7 @@ dependencies:
   flutter_v2ray_client: ^3.3.0
   url_launcher: ^6.3.2
   shared_preferences: ^2.3.0
+  qr_flutter: ^4.1.0
 
 dev_dependencies:
   flutter_test:

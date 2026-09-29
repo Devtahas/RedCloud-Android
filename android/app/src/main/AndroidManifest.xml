@@ -5,6 +5,12 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <!-- دسترسی استخراج لیست برنامه‌های نصب‌شده جهت Split Tunneling -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="QueryAllPackagesPermission" />
+    <!-- دسترسی سیستمی جهت باز کردن صفحه نصب آپدیت جدید برنامه -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     
     <!-- دسترسی‌های پایداری در پس‌زمینه، قفل پردازنده و ممانعت از به خواب رفتن پروسس‌ها -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
@@ -66,6 +72,17 @@
             android:stopWithTask="false"
             android:foregroundServiceType="specialUse"
             tools:targetApi="34" />
+
+        <!-- پرووایدر رسمی امن جهت انتقال فایل APK دانلودشده به سیستم نصب اندروید -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <!-- متادیتای مورد نیاز لایه موتور فلاتر -->
         <meta-data
